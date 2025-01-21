@@ -9,7 +9,9 @@ import numpy as np
 import torch
 from environment import WordleEnvironment
 from agent import DQNAgent
-from train_minimal import flatten_state
+from train import flatten_state
+from collections import Counter
+from collections import defaultdict
 
 def colorize_feedback(guess, feedback_string):
     """
@@ -83,6 +85,7 @@ def play_game(env, agent, secret_word):
     guesses = []
     feedbacks = []
     solved = False
+    num_guesses = 0
     
     while True:
         print_known_letters(feedback_matrix)
@@ -92,6 +95,7 @@ def play_game(env, agent, secret_word):
         state = flatten_state(feedback_matrix, valid_mask, remaining_guesses)
         action = agent.select_action(state, valid_mask)
         guess = env.valid_words[action]
+        num_guesses += 1
         
         # Take step in environment
         next_feedback_matrix, next_valid_mask, next_remaining_guesses, reward, done = env.step(guess)
@@ -102,12 +106,12 @@ def play_game(env, agent, secret_word):
         feedbacks.append(feedback_string)
         
         # Print the guess and feedback
-        print(f"\nGuess {6-remaining_guesses}: {colorize_feedback(guess, feedback_string)}")
+        print(f"\nGuess {num_guesses}: {colorize_feedback(guess, feedback_string)}")
         
         if done:
             solved = (guess == secret_word)
             if solved:
-                print(f"\n✨ Solved in {6-remaining_guesses} guesses!")
+                print(f"\n✨ Solved in {num_guesses} guesses!")
             else:
                 print(f"\n❌ Failed to solve. The word was: {secret_word}")
             break
@@ -116,57 +120,94 @@ def play_game(env, agent, secret_word):
         valid_mask = next_valid_mask
         remaining_guesses = next_remaining_guesses
     
-    return solved, 6-remaining_guesses, guesses, feedbacks
+    return solved, num_guesses, guesses, feedbacks
 
 def main():
     """
-    Main function to set up the environment and agent for interactive gameplay.
-    Loads the trained model and allows playing multiple games while visualizing
-    the agent's decision process.
+    Main function to play multiple games and show statistics.
     """
-    # Load test words (using the same set as training)
-    with open('data/train_words.txt', 'r') as f:
-        all_words = [line.strip() for line in f if line.strip()][:50]  # Use only first 50 words
-    test_words = random.sample(all_words, 10)  # Randomly sample 10 words to test
+    # Load words
+    test_words = []
+    with open('data/test_words.txt', 'r') as f:
+        test_words = [line.strip() for line in f]
+    print(f"Loaded {len(test_words)} test words")
     
-    # Initialize environment and agent
-    env = WordleEnvironment(valid_words=all_words, max_guesses=6)
-    state_dim = 390 + len(all_words) + 1  # feedback_matrix + valid_mask + remaining_guesses
-    action_dim = len(all_words)
-    
+    # Create environment and agent
+    env = WordleEnvironment(valid_words=test_words, max_guesses=6)
+    state_dim = 390 + len(test_words) + 1
+    action_dim = len(test_words)
     agent = DQNAgent(
         state_dim=state_dim,
         action_dim=action_dim,
-        hidden_dim=64,
+        hidden_dim=256,
+        lr=1e-3,
+        gamma=0.99,
+        epsilon_start=0.01,
+        epsilon_end=0.01,
+        epsilon_decay=1.0,
+        target_update_freq=1000,
         device="cpu"
     )
     
-    # Load the trained model
-    agent.load("dqn_model_minimal.pth")
+    # Load trained model
+    checkpoint = torch.load("dqn_model_final.pth", map_location="cpu")
+    agent.online_net.load_state_dict(checkpoint['online_net'])
+    agent.online_net.eval()
     
-    # Play 10 games
-    total_games = 10
-    solved_games = 0
+    # Play games
+    num_games = 20
+    print(f"\nPlaying {num_games} games using test words...")
+    print("-" * 40)
+    
+    solved_count = 0
     total_guesses = 0
+    guess_distribution = defaultdict(int)
+    letter_accuracy = defaultdict(list)
+    common_first_guesses = defaultdict(int)
     
-    print(f"\nPlaying {total_games} games...")
-    print("=" * 50)
-    
-    for i in range(total_games):
-        secret_word = test_words[i]
+    for _ in range(num_games):
+        secret_word = random.choice(test_words)
         solved, num_guesses, guesses, feedbacks = play_game(env, agent, secret_word)
         
         if solved:
-            solved_games += 1
+            solved_count += 1
             total_guesses += num_guesses
+            guess_distribution[num_guesses] += 1
+        else:
+            guess_distribution['X'] += 1
+            
+        # Track first guesses
+        if guesses:
+            common_first_guesses[guesses[0]] += 1
+            
+        # Track letter accuracy
+        for guess in guesses:
+            for pos, (guess_letter, true_letter) in enumerate(zip(guess, secret_word)):
+                letter_accuracy[pos].append(guess_letter == true_letter)
     
     # Print statistics
-    print("\nFinal Statistics:")
-    print(f"Games played: {total_games}")
-    print(f"Games solved: {solved_games}")
-    print(f"Success rate: {(solved_games/total_games)*100:.1f}%")
-    if solved_games > 0:
-        print(f"Average guesses when solved: {total_guesses/solved_games:.1f}")
+    print("\nGame Statistics:")
+    print(f"Solved: {solved_count}/{num_games} ({solved_count/num_games*100:.1f}%)")
+    if solved_count > 0:
+        print(f"Average guesses when solved: {total_guesses/solved_count:.2f}")
+    
+    print("\nGuess Distribution:")
+    for guesses, count in sorted(guess_distribution.items()):
+        if guesses == 'X':
+            print(f"Failed: {count} games")
+        else:
+            print(f"{guesses} guesses: {count} games ({count/num_games*100:.1f}%)")
+            
+    print("\nLetter Accuracy by Position:")
+    for pos, accuracies in letter_accuracy.items():
+        avg_accuracy = sum(accuracies) / len(accuracies) * 100
+        print(f"Position {pos+1}: {avg_accuracy:.1f}%")
+    
+    print("\nFirst Guess Analysis:")
+    print("Most common first guesses:")
+    top_guesses = sorted(common_first_guesses.items(), key=lambda x: x[1], reverse=True)
+    for guess, count in top_guesses:
+        print(f"  {guess}: {count} times ({count/num_games*100:.1f}%)")
 
 if __name__ == "__main__":
     main()
