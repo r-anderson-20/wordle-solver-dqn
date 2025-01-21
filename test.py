@@ -1,3 +1,10 @@
+"""
+Testing module for the Wordle DQN agent.
+Implements evaluation procedures for assessing the agent's performance
+on unseen test words. Provides detailed statistics on solve rate,
+average guesses needed, and distribution of guess counts.
+"""
+
 import random
 import numpy as np
 import torch
@@ -17,14 +24,20 @@ def test(
     Evaluate a trained DQNAgent on a set of unseen words.
 
     Args:
-        train_words (list[str]): List of valid words the agent can use as guesses.
-        test_words (list[str]): List of words to test the agent on.
-        model_path (str): Path to the saved model file.
-        hidden_dim (int): Hidden dimension of the QNetwork (must match training).
-        device (str): "cpu" or "cuda" for running the model inference.
+        train_words (list[str]): List of valid words the agent can use as guesses
+        test_words (list[str]): List of words to test the agent on
+        model_path (str): Path to the saved model file
+        hidden_dim (int): Hidden dimension of the QNetwork (must match training)
+        device (str): "cpu" or "cuda" for running the model inference
 
     Returns:
-        tuple: (success_rate, avg_guesses) - Percentage of words solved and average guesses needed
+        tuple: (success_rate, avg_guesses, metrics) where:
+            - success_rate (float): Percentage of words solved
+            - avg_guesses (float): Average number of guesses for solved words
+            - metrics (dict): Additional metrics including:
+                - guess_distribution: Dictionary mapping number of guesses to count
+                - num_solved: Total number of words solved
+                - total_words: Total number of words attempted
     """
     # Create environment with training words as valid guesses
     env = WordleEnvironment(valid_words=train_words, max_guesses=6)
@@ -123,18 +136,33 @@ def test(
     for guess, count in top_guesses:
         print(f"{guess}: {count} times ({count/total_words*100:.1f}%)")
     
-    return success_rate, avg_guesses
+    metrics = {
+        "guess_distribution": dict(guess_distribution),
+        "num_solved": solved_words,
+        "total_words": total_words
+    }
+    
+    return success_rate, avg_guesses, metrics
 
 if __name__ == "__main__":
     # Example usage with proper word lists
     def load_words(filename):
+        """
+        Load words from a text file, one word per line.
+        
+        Args:
+            filename (str): Path to the word list file
+        
+        Returns:
+            list[str]: List of words from the file
+        """
         with open(filename, 'r') as f:
             return [line.strip() for line in f if line.strip()]
     
     train_words = load_words('data/train_words.txt')
     test_words = load_words('data/test_words.txt')
     
-    success_rate, avg_guesses = test(
+    success_rate, avg_guesses, metrics = test(
         train_words=train_words,
         test_words=test_words,
         model_path="dqn_model.pth"

@@ -1,3 +1,9 @@
+"""
+Interactive script for playing Wordle with the trained DQN agent.
+Allows visualization of the agent's decision-making process and provides
+colored feedback for guesses.
+"""
+
 import random
 import numpy as np
 import torch
@@ -6,6 +12,16 @@ from agent import DQNAgent
 from train_minimal import flatten_state
 
 def colorize_feedback(guess, feedback_string):
+    """
+    Convert feedback string to colored output.
+    
+    Args:
+        guess (str): The guessed word
+        feedback_string (str): The feedback string from the environment
+        
+    Returns:
+        str: The colored feedback string
+    """
     """Convert feedback string to colored output."""
     result = []
     for letter, fb in zip(guess, feedback_string):
@@ -18,6 +34,12 @@ def colorize_feedback(guess, feedback_string):
     return ' '.join(result)
 
 def print_known_letters(feedback_matrix):
+    """
+    Print known letter information from feedback matrix.
+    
+    Args:
+        feedback_matrix (numpy array): The feedback matrix from the environment
+    """
     """Print known letter information from feedback matrix."""
     alphabet = 'abcdefghijklmnopqrstuvwxyz'
     green_letters = []
@@ -42,6 +64,17 @@ def print_known_letters(feedback_matrix):
         print("  Incorrect letters:", ', '.join(set(gray_letters)))
 
 def play_game(env, agent, secret_word):
+    """
+    Play a single game of Wordle with visualization.
+    
+    Args:
+        env (WordleEnvironment): The Wordle environment instance
+        agent (DQNAgent): The trained DQN agent
+        secret_word (str): The target word to guess
+        
+    Returns:
+        tuple: (solved, num_guesses, guesses, feedbacks) - Whether the word was solved, number of guesses used, guesses, and feedbacks
+    """
     """Play a single game and return the number of guesses and if solved."""
     feedback_matrix, valid_mask, remaining_guesses = env.reset(secret_word)
     print(f"\nTarget word: {secret_word}")
@@ -86,6 +119,11 @@ def play_game(env, agent, secret_word):
     return solved, 6-remaining_guesses, guesses, feedbacks
 
 def main():
+    """
+    Main function to set up the environment and agent for interactive gameplay.
+    Loads the trained model and allows playing multiple games while visualizing
+    the agent's decision process.
+    """
     # Load test words (using the same set as training)
     with open('data/train_words.txt', 'r') as f:
         all_words = [line.strip() for line in f if line.strip()][:50]  # Use only first 50 words

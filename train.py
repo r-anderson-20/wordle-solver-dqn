@@ -1,3 +1,10 @@
+"""
+Training module for the Wordle DQN agent.
+Implements the training loop, experience replay, and evaluation procedures
+for the deep Q-learning agent. Includes functionality for periodic evaluation
+and model checkpointing.
+"""
+
 import random
 import numpy as np
 import torch
@@ -8,15 +15,21 @@ from tqdm import tqdm
 
 def flatten_state(feedback_matrix, valid_mask, remaining_guesses):
     """
-    Convert the environment state into a 1D vector.
+    Convert the environment state into a 1D vector for neural network input.
     
     Args:
         feedback_matrix (np.ndarray): 5x26x3 matrix of letter feedback
-        valid_mask (np.ndarray): Boolean mask of valid words
+            - First dimension (5): Letter positions
+            - Second dimension (26): Letters of the alphabet
+            - Third dimension (3): Feedback type [correct, present, absent]
+        valid_mask (np.ndarray): Boolean mask of valid words in dictionary
         remaining_guesses (int): Number of guesses remaining
         
     Returns:
-        np.ndarray: Flattened state vector
+        np.ndarray: Flattened state vector concatenating:
+            - Flattened feedback matrix (5*26*3 = 390 elements)
+            - Valid word mask (dictionary_size elements)
+            - Remaining guesses (1 element)
     """
     # Ensure inputs are numpy arrays
     feedback_matrix = np.asarray(feedback_matrix)
@@ -46,27 +59,32 @@ def train(
     device="cpu"
 ):
     """
-    Train a DQN agent to play Wordle.
+    Train a DQN agent to play Wordle using deep Q-learning.
     
     Args:
-        valid_words (list): List of valid words for training
-        test_words (list): List of words for evaluation
-        num_episodes (int): Number of episodes to train for
+        valid_words (list[str]): List of valid words for training
+        test_words (list[str]): List of words to use for evaluation
+        num_episodes (int): Total number of training episodes
         hidden_dim (int): Size of hidden layers in Q-network
         learning_rate (float): Learning rate for optimizer
-        gamma (float): Discount factor
-        epsilon_start (float): Starting value for epsilon
-        epsilon_end (float): Minimum value for epsilon
+        gamma (float): Discount factor for future rewards
+        epsilon_start (float): Initial exploration rate
+        epsilon_end (float): Final exploration rate
         epsilon_decay (float): Decay rate for epsilon
-        batch_size (int): Batch size for training
-        target_update_freq (int): How often to update target network
-        eval_freq (int): How often to evaluate the agent
-        eval_episodes (int): Number of episodes to evaluate on
-        device (str): Device to run on ("cpu" or "cuda")
-    
+        batch_size (int): Size of training batches
+        target_update_freq (int): Steps between target network updates
+        eval_freq (int): Episodes between evaluations
+        eval_episodes (int): Number of episodes for each evaluation
+        device (str): Device to use for training ("cpu" or "cuda")
+        
     Returns:
-        agent: Trained DQN agent
-        metrics: Dictionary of training metrics
+        DQNAgent: The trained agent
+        
+    Notes:
+        - Uses experience replay for stable learning
+        - Implements epsilon-greedy exploration
+        - Periodically evaluates on test set
+        - Saves best model based on evaluation performance
     """
     # Initialize training environment with only training words
     env = WordleEnvironment(valid_words=valid_words, max_guesses=6)
@@ -249,13 +267,21 @@ def train(
         'best_solved_rate': best_solved_rate
     }
 
+def load_words(filename):
+    """
+    Load words from a text file, one word per line.
+    
+    Args:
+        filename (str): Path to the word list file
+        
+    Returns:
+        list[str]: List of words from the file
+    """
+    with open(filename, 'r') as f:
+        return [line.strip() for line in f if line.strip()]
+
 if __name__ == "__main__":
     # Load words
-    def load_words(filename):
-        with open(filename, 'r') as f:
-            return [line.strip() for line in f if line.strip()]
-    
-    # Load training and test words from separate files
     train_words = load_words('data/train_words.txt')
     test_words = load_words('data/test_words.txt')
     

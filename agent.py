@@ -1,3 +1,13 @@
+"""
+Deep Q-Network (DQN) agent implementation for Wordle.
+Contains the neural network architecture (QNetwork) and agent logic (DQNAgent)
+for learning to play Wordle through deep reinforcement learning.
+
+Key components:
+- QNetwork: Deep neural network with residual connections
+- DQNAgent: Implements DQN algorithm with experience replay and target network
+"""
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -7,14 +17,28 @@ import numpy as np
 
 class QNetwork(nn.Module):
     """
-    Feed-forward network for estimating Q-values with residual connections.
+    Neural network for Q-value approximation with residual connections.
+    
+    Architecture:
+    - Input layer: state vector → hidden_dim
+    - Two residual blocks with ReLU activation
+    - Dropout layers for regularization
+    - Output layer: hidden_dim → action_dim (Q-values for each word)
+    
+    Uses He initialization for weights and implements residual connections
+    for better gradient flow during training.
     """
     def __init__(self, input_dim, output_dim, hidden_dim=256):
         """
+        Initialize the Q-network.
+
         Args:
-            input_dim (int): Size of the input (state) vector.
-            output_dim (int): Number of possible actions (e.g., size of dictionary).
-            hidden_dim (int): Number of hidden units (tunable).
+            input_dim (int): Size of the input (state) vector
+            output_dim (int): Number of possible actions (size of word dictionary)
+            hidden_dim (int): Number of hidden units in each layer
+
+        Raises:
+            ValueError: If any dimension is not positive
         """
         super(QNetwork, self).__init__()
         
@@ -50,7 +74,13 @@ class QNetwork(nn.Module):
         self._init_weights()
     
     def _init_weights(self):
-        """Initialize network weights using He initialization."""
+        """
+        Initialize network weights using He initialization.
+        
+        Applies to all linear layers:
+        - Weights: He initialization for ReLU activation
+        - Biases: Initialized to zero
+        """
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.kaiming_normal_(module.weight, nonlinearity='relu')
@@ -60,6 +90,17 @@ class QNetwork(nn.Module):
     def forward(self, x):
         """
         Forward pass through the network.
+        
+        Args:
+            x (torch.Tensor): Input tensor of shape [batch_size, input_dim]
+                            or [input_dim] for single sample
+        
+        Returns:
+            torch.Tensor: Q-values for each action, shape [batch_size, output_dim]
+                         or [output_dim] for single sample
+                         
+        Raises:
+            TypeError: If input is not a torch.Tensor
         """
         # Input validation
         if not isinstance(x, torch.Tensor):
@@ -96,10 +137,17 @@ class QNetwork(nn.Module):
 
 class DQNAgent:
     """
-    Deep Q-Network Agent:
-      - Maintains an online Q-network and a target Q-network.
-      - Uses epsilon-greedy exploration to select actions.
-      - Periodically updates target network weights.
+    Deep Q-Network Agent for playing Wordle.
+    
+    Features:
+    - Maintains online and target networks for stable learning
+    - Uses epsilon-greedy exploration strategy
+    - Implements experience replay
+    - Supports both training and evaluation modes
+    - Tracks training statistics (loss, average Q-values)
+    
+    The agent learns to map state observations (feedback matrix + valid words)
+    to Q-values for each possible word in the dictionary.
     """
 
     def __init__(
@@ -116,17 +164,22 @@ class DQNAgent:
         device=None
     ):
         """
+        Initialize the DQN agent.
+
         Args:
-            state_dim (int): Dimension of the flattened state input.
-            action_dim (int): Number of possible actions (e.g., # of words in dictionary).
-            hidden_dim (int): Hidden layer size for QNetwork.
-            lr (float): Learning rate for the optimizer.
-            gamma (float): Discount factor for Q-learning.
-            epsilon_start (float): Initial value of epsilon for exploration.
-            epsilon_end (float): Minimum value of epsilon after decay.
-            epsilon_decay (float): Multiplicative factor for epsilon decay each step.
-            target_update_freq (int): Frequency (in steps) to update target network.
-            device (str or torch.device): "cpu" or "cuda" device for PyTorch.
+            state_dim (int): Dimension of the state vector
+            action_dim (int): Number of possible actions (dictionary size)
+            hidden_dim (int): Size of hidden layers in QNetwork
+            lr (float): Learning rate for Adam optimizer
+            gamma (float): Discount factor for future rewards
+            epsilon_start (float): Initial exploration rate
+            epsilon_end (float): Final exploration rate
+            epsilon_decay (float): Multiplicative decay factor for epsilon
+            target_update_freq (int): Steps between target network updates
+            device (str or torch.device): Device to use for tensor operations
+
+        Raises:
+            ValueError: If parameters are invalid (e.g., negative dimensions)
         """
         # Input validation
         if state_dim <= 0 or action_dim <= 0:
@@ -168,14 +221,19 @@ class DQNAgent:
 
     def select_action(self, state, valid_mask, eval_mode=False):
         """
-        Epsilon-greedy action selection.
+        Select action using epsilon-greedy policy.
+        
         Args:
-            state (np.ndarray or torch.Tensor): The current state, shape [state_dim].
-            valid_mask (np.ndarray or list[bool]): Boolean mask of valid actions (words).
-            eval_mode (bool): If True, uses a very small epsilon for evaluation.
-
+            state (np.ndarray or torch.Tensor): Current state observation
+            valid_mask (np.ndarray or list[bool]): Mask of valid actions
+            eval_mode (bool): If True, uses small epsilon for evaluation
+            
         Returns:
-            action (int): Index of the chosen action (word) in [0, action_dim).
+            int: Index of the selected action (word)
+            
+        Raises:
+            TypeError: If inputs have incorrect types
+            ValueError: If valid_mask length doesn't match action_dim
         """
         # Input validation
         if not isinstance(valid_mask, (np.ndarray, list)):
@@ -222,7 +280,17 @@ class DQNAgent:
     def learn(self, batch):
         """
         Update the Q-network using a batch of transitions.
-        Implements Double DQN for more stable learning.
+        
+        Args:
+            batch (dict): Batch of transitions with keys:
+                - states (torch.Tensor): Current states
+                - actions (torch.Tensor): Actions taken
+                - rewards (torch.Tensor): Rewards received
+                - next_states (torch.Tensor): Next states
+                - dones (torch.Tensor): Episode termination flags
+        
+        Returns:
+            float: The loss value for this update
         """
         states = torch.tensor(batch['states'], device=self.device)
         actions = torch.tensor(batch['actions'], device=self.device)

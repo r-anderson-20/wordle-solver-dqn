@@ -1,14 +1,43 @@
-# main.py
+"""
+Main entry point for training and testing the Wordle DQN agent.
+Provides command-line interface for running different modes of operation
+and managing model files.
+"""
+
 import argparse
 import torch
 from train import train
 from test import test
 
 def load_words(filename):
+    """
+    Load words from a text file.
+    
+    Args:
+        filename (str): Path to the text file containing words
+        
+    Returns:
+        list[str]: List of words from the file
+    """
     with open(filename, 'r') as f:
         return [line.strip() for line in f if line.strip()]
 
 def parse_args():
+    """
+    Parse command line arguments.
+    
+    Returns:
+        argparse.Namespace: Parsed command line arguments containing:
+            - mode: 'train' or 'test'
+            - model_path: path to save/load model
+            - train_words: path to training words file
+            - test_words: path to test words file
+            - num_episodes: number of training episodes
+            - hidden_dim: hidden layer dimension
+            - batch_size: training batch size
+            - learning_rate: optimizer learning rate
+            - device: 'cuda' or 'cpu'
+    """
     parser = argparse.ArgumentParser(description='Train or test the Wordle DQN agent')
     parser.add_argument("--mode", choices=["train", "test"], required=True)
     parser.add_argument("--model_path", type=str, default="dqn_model.pth")
@@ -22,6 +51,11 @@ def parse_args():
     return parser.parse_args()
 
 def main():
+    """
+    Main function to run training or testing of the Wordle DQN agent.
+    Handles command line arguments and executes the appropriate mode
+    of operation (training or testing).
+    """
     args = parse_args()
     
     # Load appropriate word lists

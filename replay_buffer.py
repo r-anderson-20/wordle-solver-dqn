@@ -1,17 +1,29 @@
+"""
+Experience replay buffer implementation for DQN training.
+Provides efficient storage and sampling of transitions (state, action, reward, next_state, done)
+using numpy arrays. Implements FIFO behavior when buffer is full.
+"""
+
 import numpy as np
 
 class ReplayBuffer:
     """
     A simple FIFO experience replay buffer for Q-learning.
-    Stores tuples of (state, action, reward, next_state, done).
+    Stores transitions using numpy arrays for efficient sampling and memory usage.
+    When buffer is full, oldest transitions are replaced first.
     """
 
     def __init__(self, max_size, state_dim):
         """
+        Initialize replay buffer with fixed maximum size.
+
         Args:
-            max_size (int): Maximum number of transitions to store.
+            max_size (int): Maximum number of transitions to store
             state_dim (int): Dimension of the flattened state vector
-                             (for example, 390 + dictionary_size + 1).
+                           (for example, 390 + dictionary_size + 1)
+
+        Raises:
+            ValueError: If max_size or state_dim are not positive
         """
         if max_size <= 0:
             raise ValueError("max_size must be positive")
@@ -33,17 +45,20 @@ class ReplayBuffer:
 
     def add(self, state, action, reward, next_state, done):
         """
-        Adds a transition to the buffer.
+        Add a transition to the buffer.
         
         Args:
-            state (np.ndarray): Flattened state vector of shape [state_dim].
-            action (int): Index of the chosen action.
-            reward (float): Reward received after taking the action.
-            next_state (np.ndarray): Flattened next-state vector [state_dim].
-            done (bool): Whether the episode ended after this transition.
+            state (np.ndarray): Current state vector [state_dim]
+            action (int): Action index taken
+            reward (float): Reward received
+            next_state (np.ndarray): Next state vector [state_dim]
+            done (bool): Whether episode ended after this transition
             
         Raises:
-            ValueError: If inputs have incorrect shapes or types.
+            ValueError: If inputs have incorrect shapes or types
+            
+        Notes:
+            When buffer is full, oldest transitions are overwritten first
         """
         # Input validation
         if not isinstance(state, np.ndarray) or state.shape != (self.state_dim,):
@@ -71,21 +86,21 @@ class ReplayBuffer:
 
     def sample(self, batch_size):
         """
-        Randomly sample a batch of transitions from the buffer.
-
+        Sample a batch of transitions randomly.
+        
         Args:
-            batch_size (int): Number of transitions to sample.
-
+            batch_size (int): Number of transitions to sample
+            
         Returns:
-            batch (dict): A dictionary containing:
-                - 'states': shape [batch_size, state_dim]
-                - 'actions': shape [batch_size]
-                - 'rewards': shape [batch_size]
-                - 'next_states': shape [batch_size, state_dim]
-                - 'dones': shape [batch_size]
+            tuple: (states, actions, rewards, next_states, dones) where:
+                - states: np.ndarray [batch_size, state_dim]
+                - actions: np.ndarray [batch_size]
+                - rewards: np.ndarray [batch_size]
+                - next_states: np.ndarray [batch_size, state_dim]
+                - dones: np.ndarray [batch_size]
                 
         Raises:
-            ValueError: If batch_size is invalid or buffer is empty.
+            ValueError: If batch_size > current buffer size
         """
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")

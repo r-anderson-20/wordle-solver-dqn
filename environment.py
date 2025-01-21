@@ -1,3 +1,12 @@
+"""
+Wordle environment implementation for reinforcement learning.
+Provides a Gym-like interface for the Wordle game, including:
+- State representation as a 3D feedback matrix
+- Action space as valid word indices
+- Reward function based on game outcome and guess quality
+- Feedback generation for guesses
+"""
+
 import numpy as np
 
 class WordleEnvironment:
