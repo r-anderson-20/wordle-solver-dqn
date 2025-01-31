@@ -11,36 +11,8 @@ import torch
 from environment import WordleEnvironment
 from agent import DQNAgent
 from replay_buffer import ReplayBuffer
+from utils import flatten_state, load_words
 from tqdm import tqdm
-
-def flatten_state(feedback_matrix, valid_mask, remaining_guesses):
-    """
-    Convert the environment state into a 1D vector for neural network input.
-    
-    Args:
-        feedback_matrix (np.ndarray): 5x26x3 matrix of letter feedback
-            - First dimension (5): Letter positions
-            - Second dimension (26): Letters of the alphabet
-            - Third dimension (3): Feedback type [correct, present, absent]
-        valid_mask (np.ndarray): Boolean mask of valid words in dictionary
-        remaining_guesses (int): Number of guesses remaining
-        
-    Returns:
-        np.ndarray: Flattened state vector concatenating:
-            - Flattened feedback matrix (5*26*3 = 390 elements)
-            - Valid word mask (dictionary_size elements)
-            - Remaining guesses (1 element)
-    """
-    # Ensure inputs are numpy arrays
-    feedback_matrix = np.asarray(feedback_matrix)
-    valid_mask = np.asarray(valid_mask)
-    
-    # Flatten and convert to float32
-    feedback_flat = feedback_matrix.reshape(-1).astype(np.float32)
-    valid_mask_float = valid_mask.astype(np.float32)
-    remaining_guesses_float = np.array([float(remaining_guesses)], dtype=np.float32)
-    
-    return np.concatenate([feedback_flat, valid_mask_float, remaining_guesses_float])
 
 def train(
     valid_words,
@@ -79,13 +51,41 @@ def train(
         
     Returns:
         DQNAgent: The trained agent
+        dict: Training metrics including rewards, lengths, and evaluation results
         
-    Notes:
-        - Uses experience replay for stable learning
-        - Implements epsilon-greedy exploration
-        - Periodically evaluates on test set
-        - Saves best model based on evaluation performance
+    Raises:
+        ValueError: If input parameters are invalid
     """
+    # Input validation
+    if not valid_words:
+        raise ValueError("valid_words must not be empty")
+    if not test_words:
+        raise ValueError("test_words must not be empty")
+    if num_episodes <= 0:
+        raise ValueError("num_episodes must be positive")
+    if hidden_dim <= 0:
+        raise ValueError("hidden_dim must be positive")
+    if learning_rate <= 0:
+        raise ValueError("learning_rate must be positive")
+    if not 0 <= gamma <= 1:
+        raise ValueError("gamma must be between 0 and 1")
+    if not 0 <= epsilon_start <= 1:
+        raise ValueError("epsilon_start must be between 0 and 1")
+    if not 0 <= epsilon_end <= 1:
+        raise ValueError("epsilon_end must be between 0 and 1")
+    if not 0 <= epsilon_decay <= 1:
+        raise ValueError("epsilon_decay must be between 0 and 1")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if target_update_freq <= 0:
+        raise ValueError("target_update_freq must be positive")
+    if eval_freq <= 0:
+        raise ValueError("eval_freq must be positive")
+    if eval_episodes <= 0:
+        raise ValueError("eval_episodes must be positive")
+    if device not in ["cpu", "cuda"]:
+        raise ValueError("device must be 'cpu' or 'cuda'")
+    
     # Initialize training environment with only training words
     env = WordleEnvironment(valid_words=valid_words, max_guesses=6)
     
@@ -157,6 +157,17 @@ def train(
             # Train if we have enough samples
             if replay_buffer.size >= batch_size:
                 batch = replay_buffer.sample(batch_size)
+                
+                # Convert batch to tensors
+                batch = {
+                    'states': torch.FloatTensor(batch['states']),
+                    'actions': torch.LongTensor(batch['actions']),
+                    'rewards': torch.FloatTensor(batch['rewards']),
+                    'next_states': torch.FloatTensor(batch['next_states']),
+                    'dones': torch.FloatTensor(batch['dones'])
+                }
+                
+                # Update agent
                 loss = agent.learn(batch)
             
             if done:
@@ -244,7 +255,7 @@ def train(
             # Save best model
             if eval_solve_rate > best_solved_rate:
                 best_solved_rate = eval_solve_rate
-                agent.save("dqn_model_best.pth")
+                agent.save("model/dqn_model_best.pth")
                 print(f"New best model saved! Solve rate: {best_solved_rate*100:.1f}%")
             
             agent.epsilon = original_epsilon
@@ -255,8 +266,8 @@ def train(
     print(f"Best evaluation solve rate: {best_solved_rate*100:.1f}%")
     
     # Save final model
-    agent.save("dqn_model_final.pth")
-    print("Final model saved to dqn_model_final.pth")
+    agent.save("model/dqn_model_final.pth")
+    print("Final model saved to model/dqn_model_final.pth")
     
     return agent, {
         'episode_rewards': episode_rewards,
@@ -267,23 +278,10 @@ def train(
         'best_solved_rate': best_solved_rate
     }
 
-def load_words(filename):
-    """
-    Load words from a text file, one word per line.
-    
-    Args:
-        filename (str): Path to the word list file
-        
-    Returns:
-        list[str]: List of words from the file
-    """
-    with open(filename, 'r') as f:
-        return [line.strip() for line in f if line.strip()]
-
 if __name__ == "__main__":
     # Load words
-    train_words = load_words('data/train_words.txt')
-    test_words = load_words('data/test_words.txt')
+    train_words = load_words('word_lists/train_words.txt')
+    test_words = load_words('word_lists/test_words.txt')
     
     print(f"Loaded {len(train_words)} training words and {len(test_words)} test words")
     

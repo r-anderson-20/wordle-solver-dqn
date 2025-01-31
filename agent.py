@@ -233,31 +233,40 @@ class DQNAgent:
             
         Raises:
             TypeError: If inputs have incorrect types
-            ValueError: If valid_mask length doesn't match action_dim
+            ValueError: If valid_mask length doesn't match action_dim or no valid actions
         """
-        # Input validation
+        # Type checking for valid_mask
         if not isinstance(valid_mask, (np.ndarray, list)):
             raise TypeError("valid_mask must be a numpy array or list")
+        
+        # Length checking for valid_mask
         if len(valid_mask) != self.action_dim:
             raise ValueError(f"valid_mask length ({len(valid_mask)}) must match action_dim ({self.action_dim})")
-            
-        # In eval mode, use a very small epsilon
-        if not eval_mode:
-            self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
         
-        # Convert state to torch.Tensor if not already
+        # Check that at least one action is valid
+        if not any(valid_mask):
+            raise ValueError("At least one action must be valid")
+        
+        # Type checking for state
+        if not isinstance(state, (np.ndarray, torch.Tensor)):
+            raise TypeError("state must be a numpy array or torch tensor")
+        
+        # Convert state to tensor if needed
         if isinstance(state, np.ndarray):
             state = torch.FloatTensor(state).to(self.device)
-        elif not isinstance(state, torch.Tensor):
-            raise TypeError("state must be either numpy array or torch tensor")
-            
-        # Add batch dimension if needed
-        if state.dim() == 1:
+        
+        # Shape checking for state
+        if state.shape[0] != self.state_dim:
+            raise ValueError(f"state dimension ({state.shape[0]}) must match state_dim ({self.state_dim})")
+        
+        # Ensure state has batch dimension
+        if len(state.shape) == 1:
             state = state.unsqueeze(0)
-
-        # Use a very small epsilon in eval mode
-        current_epsilon = 0.01 if eval_mode else self.epsilon
-
+        
+        # Use small epsilon for evaluation
+        current_epsilon = 0.05 if eval_mode else self.epsilon
+        
+        # Epsilon-greedy action selection
         if random.random() > current_epsilon:
             with torch.no_grad():
                 q_values = self.online_net(state)
@@ -292,11 +301,12 @@ class DQNAgent:
         Returns:
             float: The loss value for this update
         """
-        states = torch.tensor(batch['states'], device=self.device)
-        actions = torch.tensor(batch['actions'], device=self.device)
-        rewards = torch.tensor(batch['rewards'], device=self.device)
-        next_states = torch.tensor(batch['next_states'], device=self.device)
-        dones = torch.tensor(batch['dones'], device=self.device)
+        # No need to convert to tensors since they're already tensors
+        states = batch['states'].to(self.device)
+        actions = batch['actions'].to(self.device)
+        rewards = batch['rewards'].to(self.device)
+        next_states = batch['next_states'].to(self.device)
+        dones = batch['dones'].to(self.device)
 
         # Compute current Q values
         current_q_values = self.online_net(states).gather(1, actions.unsqueeze(1))
@@ -356,16 +366,16 @@ class DQNAgent:
         
     def load(self, path):
         """Load a saved state dict."""
-        checkpoint = torch.load(path, map_location=self.device)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
         self.online_net.load_state_dict(checkpoint['online_net'])
         self.target_net.load_state_dict(checkpoint['online_net'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
-        self.train_steps = checkpoint['train_steps']
-        self.epsilon = checkpoint['epsilon']
+        self.train_steps = int(checkpoint['train_steps'])  # Convert to int for safety
+        self.epsilon = float(checkpoint['epsilon'])  # Convert to float for safety
         
         # Restore statistics if available
         if 'statistics' in checkpoint:
             stats = checkpoint['statistics']
-            self.updates = stats.get('updates', 0)
-            self.avg_loss = stats.get('avg_loss', 0)
-            self.avg_q = stats.get('avg_q', 0)
+            self.updates = int(stats.get('updates', 0))
+            self.avg_loss = float(stats.get('avg_loss', 0))
+            self.avg_q = float(stats.get('avg_q', 0))

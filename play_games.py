@@ -9,61 +9,9 @@ import numpy as np
 import torch
 from environment import WordleEnvironment
 from agent import DQNAgent
-from train import flatten_state
+from utils import flatten_state, colorize_feedback, print_known_letters, load_words
 from collections import Counter
 from collections import defaultdict
-
-def colorize_feedback(guess, feedback_string):
-    """
-    Convert feedback string to colored output.
-    
-    Args:
-        guess (str): The guessed word
-        feedback_string (str): The feedback string from the environment
-        
-    Returns:
-        str: The colored feedback string
-    """
-    """Convert feedback string to colored output."""
-    result = []
-    for letter, fb in zip(guess, feedback_string):
-        if fb == 'G':
-            result.append(f'\033[92m{letter}\033[0m')  # Green
-        elif fb == 'Y':
-            result.append(f'\033[93m{letter}\033[0m')  # Yellow
-        else:
-            result.append(f'\033[90m{letter}\033[0m')  # Gray
-    return ' '.join(result)
-
-def print_known_letters(feedback_matrix):
-    """
-    Print known letter information from feedback matrix.
-    
-    Args:
-        feedback_matrix (numpy array): The feedback matrix from the environment
-    """
-    """Print known letter information from feedback matrix."""
-    alphabet = 'abcdefghijklmnopqrstuvwxyz'
-    green_letters = []
-    yellow_letters = []
-    gray_letters = []
-    
-    for i in range(26):  # For each letter
-        for pos in range(5):  # For each position
-            if feedback_matrix[pos, i, 0] > 0:  # Green
-                green_letters.append(f"{alphabet[i].upper()} at position {pos+1}")
-            elif feedback_matrix[pos, i, 1] > 0:  # Yellow
-                yellow_letters.append(alphabet[i].upper())
-            elif feedback_matrix[pos, i, 2] > 0:  # Gray
-                gray_letters.append(alphabet[i].upper())
-    
-    print("Known information:")
-    if green_letters:
-        print("  Correct positions:", ', '.join(green_letters))
-    if yellow_letters:
-        print("  Correct letters:", ', '.join(set(yellow_letters)))
-    if gray_letters:
-        print("  Incorrect letters:", ', '.join(set(gray_letters)))
 
 def play_game(env, agent, secret_word):
     """
@@ -98,7 +46,14 @@ def play_game(env, agent, secret_word):
         num_guesses += 1
         
         # Take step in environment
-        next_feedback_matrix, next_valid_mask, next_remaining_guesses, reward, done = env.step(guess)
+        try:
+            next_feedback_matrix, next_valid_mask, next_remaining_guesses, reward, done = env.step(guess)
+        except ValueError as e:
+            print(f"\nError: {e}")
+            # Record the guess and feedback before returning
+            guesses.append(guess)
+            feedbacks.append(env._compute_feedback_string(guess, secret_word))
+            return False, num_guesses, guesses, feedbacks
         
         # Get feedback string for visualization
         feedback_string = env._compute_feedback_string(guess, secret_word)
@@ -122,20 +77,24 @@ def play_game(env, agent, secret_word):
     
     return solved, num_guesses, guesses, feedbacks
 
-def main():
+def main(words=None):
     """
     Main function to play multiple games and show statistics.
+    
+    Args:
+        words (list[str], optional): List of words to use for both valid guesses and secret words.
+                                   If None, loads test words from file.
     """
-    # Load words
-    test_words = []
-    with open('data/test_words.txt', 'r') as f:
-        test_words = [line.strip() for line in f]
-    print(f"Loaded {len(test_words)} test words")
+    # If no words provided, load test words
+    if words is None:
+        words = load_words('word_lists/test_words.txt')
+        
+    print(f"Using {len(words)} words for gameplay")
     
     # Create environment and agent
-    env = WordleEnvironment(valid_words=test_words, max_guesses=6)
-    state_dim = 390 + len(test_words) + 1
-    action_dim = len(test_words)
+    env = WordleEnvironment(valid_words=words, max_guesses=6)
+    state_dim = 390 + len(words) + 1
+    action_dim = len(words)
     agent = DQNAgent(
         state_dim=state_dim,
         action_dim=action_dim,
@@ -150,7 +109,7 @@ def main():
     )
     
     # Load trained model
-    checkpoint = torch.load("dqn_model_final.pth", map_location="cpu")
+    checkpoint = torch.load("model/dqn_model_final.pth", map_location="cpu")
     agent.online_net.load_state_dict(checkpoint['online_net'])
     agent.online_net.eval()
     
@@ -166,7 +125,7 @@ def main():
     common_first_guesses = defaultdict(int)
     
     for _ in range(num_games):
-        secret_word = random.choice(test_words)
+        secret_word = random.choice(words)
         solved, num_guesses, guesses, feedbacks = play_game(env, agent, secret_word)
         
         if solved:
@@ -192,11 +151,13 @@ def main():
         print(f"Average guesses when solved: {total_guesses/solved_count:.2f}")
     
     print("\nGuess Distribution:")
-    for guesses, count in sorted(guess_distribution.items()):
-        if guesses == 'X':
-            print(f"Failed: {count} games")
-        else:
-            print(f"{guesses} guesses: {count} games ({count/num_games*100:.1f}%)")
+    # Print numeric guesses first
+    for guesses, count in sorted((k, v) for k, v in guess_distribution.items() if isinstance(k, int)):
+        print(f"{guesses} guesses: {count} games ({count/num_games*100:.1f}%)")
+    # Print failed games last
+    if 'X' in guess_distribution:
+        count = guess_distribution['X']
+        print(f"Failed: {count} games ({count/num_games*100:.1f}%)")
             
     print("\nLetter Accuracy by Position:")
     for pos, accuracies in letter_accuracy.items():

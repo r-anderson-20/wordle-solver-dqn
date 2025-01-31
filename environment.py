@@ -147,6 +147,14 @@ class WordleEnvironment:
             'G' for correct letter in correct position (green)
             'Y' for correct letter in wrong position (yellow)
             'B' for incorrect letter (black/gray)
+            
+        The feedback follows official Wordle rules for repeated letters:
+        1. First mark all exact matches as green
+        2. Then mark letters in wrong positions as yellow, considering:
+           - If a letter appears multiple times in the guess but only once in the answer,
+             only the first instance gets marked (either green or yellow)
+           - If a letter appears multiple times in both guess and answer,
+             all instances get marked appropriately
         """
         feedback = ['B'] * 5
         target_chars = list(target)

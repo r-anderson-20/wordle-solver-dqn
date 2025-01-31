@@ -7,20 +7,8 @@ and managing model files.
 import argparse
 import torch
 from train import train
-from test import test
-
-def load_words(filename):
-    """
-    Load words from a text file.
-    
-    Args:
-        filename (str): Path to the text file containing words
-        
-    Returns:
-        list[str]: List of words from the file
-    """
-    with open(filename, 'r') as f:
-        return [line.strip() for line in f if line.strip()]
+from play_games import main as play_games
+from utils import load_words
 
 def parse_args():
     """
@@ -40,9 +28,9 @@ def parse_args():
     """
     parser = argparse.ArgumentParser(description='Train or test the Wordle DQN agent')
     parser.add_argument("--mode", choices=["train", "test"], required=True)
-    parser.add_argument("--model_path", type=str, default="dqn_model.pth")
-    parser.add_argument("--train_words", type=str, default="data/train_words.txt")
-    parser.add_argument("--test_words", type=str, default="data/test_words.txt")
+    parser.add_argument("--model_path", type=str, default="model/dqn_model.pth")
+    parser.add_argument("--train_words", type=str, default="word_lists/train_words.txt")
+    parser.add_argument("--test_words", type=str, default="word_lists/test_words.txt")
     parser.add_argument("--num_episodes", type=int, default=5000)
     parser.add_argument("--hidden_dim", type=int, default=256)
     parser.add_argument("--batch_size", type=int, default=64)
@@ -61,10 +49,12 @@ def main():
     # Load appropriate word lists
     if args.mode == "train":
         train_words = load_words(args.train_words)
+        test_words = load_words(args.test_words)
         print(f"Loaded {len(train_words)} training words")
         
-        trained_agent = train(
+        trained_agent, _ = train(
             valid_words=train_words,
+            test_words=test_words,
             num_episodes=args.num_episodes,
             hidden_dim=args.hidden_dim,
             batch_size=args.batch_size,
@@ -78,22 +68,12 @@ def main():
         print(f"Model saved to {args.model_path}")
 
     elif args.mode == "test":
-        # For testing, we need both train and test words
-        train_words = load_words(args.train_words)  # For valid guesses
-        test_words = load_words(args.test_words)    # For secret words
-        print(f"Loaded {len(train_words)} training words and {len(test_words)} test words")
+        # For testing, we only need test words
+        test_words = load_words(args.test_words)
+        print(f"Loaded {len(test_words)} test words")
         
-        success_rate, avg_guesses = test(
-            train_words=train_words,  # Words the agent can use as guesses
-            test_words=test_words,    # Words to test on
-            model_path=args.model_path,
-            hidden_dim=args.hidden_dim,
-            device=args.device
-        )
-        
-        print(f"\nTest Results:")
-        print(f"Success Rate: {success_rate:.1f}%")
-        print(f"Average Guesses (when solved): {avg_guesses:.2f}")
+        # Use test words for both valid guesses and secret words
+        play_games(test_words)
 
 if __name__ == "__main__":
     main()

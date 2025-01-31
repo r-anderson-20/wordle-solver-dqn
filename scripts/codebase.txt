@@ -1,0 +1,1653 @@
+=== WORDLE SOLVER DQN CODEBASE ===
+Exported from: /Users/robanderson/workspace/wordle-solver-DQN
+
+
+================================================================================
+FILE: README.md
+================================================================================
+
+# Wordle Solver using Deep Q-Learning
+
+This project implements an AI agent that learns to play Wordle using Deep Q-Learning (DQN). The agent achieves a 100% solve rate on test words with an average of 3.42 guesses per word.
+
+## Project Overview
+
+The agent uses reinforcement learning to develop optimal strategies for solving Wordle puzzles. It learns to:
+1. Make strategic initial guesses that maximize information gain
+2. Use feedback from previous guesses effectively
+3. Narrow down possible solutions based on letter positions and frequencies
+
+### Key Features
+- Custom Wordle environment implementation
+- Deep Q-Network (DQN) with experience replay
+- Separate training and testing word sets
+- Interactive play mode for human vs. AI comparison
+- Pre-trained model included
+
+## Architecture
+
+### Environment (`environment.py`)
+- Implements the Wordle game mechanics
+- Provides state representation as a 3D matrix (5x26x3):
+  - 5 letter positions
+  - 26 possible letters
+  - 3 feedback types (correct, present, absent)
+- Handles word validation and feedback generation
+
+### DQN Agent (`agent.py`)
+- Neural network architecture:
+  - Input: State vector (feedback matrix + valid word mask + remaining guesses)
+  - Hidden layers with ReLU activation
+  - Output: Q-values for each possible word
+- Epsilon-greedy exploration strategy
+- Experience replay for stable learning
+- Target network for Q-learning stability
+
+### Training Process (`train.py`)
+- Separate training (500 words) and testing (500 words) sets
+- Periodic evaluation on test set
+- Performance metrics tracking:
+  - Solve rate
+  - Average number of guesses
+  - Training rewards
+
+## Results
+
+The trained agent achieves:
+- 100% solve rate on test words
+- Average of 3.42 guesses per solved puzzle
+- Consistent performance across different word patterns
+
+## Installation
+
+1. Clone the repository:
+```bash
+git clone https://github.com/r-anderson-20/wordle-solver-dqn.git
+cd wordle-solver-dqn
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+
+### Play with Pre-trained Model
+```bash
+python play_games.py
+```
+
+### Train New Model
+```bash
+python train.py
+```
+
+### Test Model Performance
+```bash
+python test.py
+```
+
+## Project Structure
+```
+wordle-solver-DQN/
+├── agent.py           # DQN agent implementation
+├── environment.py     # Wordle environment
+├── train.py          # Training script
+├── play_games.py     # Interactive gameplay
+├── test.py           # Testing utilities
+├── replay_buffer.py  # Experience replay implementation
+├── data/
+│   ├── train_words.txt  # Training word set
+│   └── test_words.txt   # Testing word set
+└── requirements.txt   # Project dependencies
+```
+
+## Dependencies
+- Python 3.8+
+- PyTorch >= 2.0.0
+- NumPy >= 1.21.0
+- tqdm >= 4.65.0
+
+## Training Details
+
+The agent is trained using:
+- Experience replay buffer (size: 10,000)
+- Epsilon-greedy exploration (start: 1.0, end: 0.01, decay: 0.995)
+- Learning rate: 1e-4
+- Discount factor (gamma): 0.99
+- Hidden layer size: 256 neurons
+- Target network update frequency: 100 episodes
+- Batch size: 64
+
+## License
+
+This project is open source and available under the MIT License.
+
+## Acknowledgments
+
+- Inspired by the original Wordle game by Josh Wardle
+- Built using PyTorch for deep learning implementation
+
+================================================================================
+FILE: agent.py
+================================================================================
+
+"""
+Deep Q-Network (DQN) agent implementation for Wordle.
+Contains the neural network architecture (QNetwork) and agent logic (DQNAgent)
+for learning to play Wordle through deep reinforcement learning.
+
+Key components:
+- QNetwork: Deep neural network with residual connections
+- DQNAgent: Implements DQN algorithm with experience replay and target network
+"""
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import random
+import numpy as np
+
+class QNetwork(nn.Module):
+    """
+    Neural network for Q-value approximation with residual connections.
+    
+    Architecture:
+    - Input layer: state vector → hidden_dim
+    - Two residual blocks with ReLU activation
+    - Dropout layers for regularization
+    - Output layer: hidden_dim → action_dim (Q-values for each word)
+    
+    Uses He initialization for weights and implements residual connections
+    for better gradient flow during training.
+    """
+    def __init__(self, input_dim, output_dim, hidden_dim=256):
+        """
+        Initialize the Q-network.
+
+        Args:
+            input_dim (int): Size of the input (state) vector
+            output_dim (int): Number of possible actions (size of word dictionary)
+            hidden_dim (int): Number of hidden units in each layer
+
+        Raises:
+            ValueError: If any dimension is not positive
+        """
+        super(QNetwork, self).__init__()
+        
+        if input_dim <= 0 or output_dim <= 0 or hidden_dim <= 0:
+            raise ValueError("All dimensions must be positive")
+        
+        # Input layer
+        self.input_layer = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU()
+        )
+        
+        # Hidden layers with residual connections
+        self.hidden_layer1 = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        
+        self.hidden_layer2 = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        
+        # Output layer
+        self.output_layer = nn.Linear(hidden_dim, output_dim)
+        
+        # Dropout for regularization
+        self.dropout = nn.Dropout(0.1)
+        
+        # Initialize weights
+        self._init_weights()
+    
+    def _init_weights(self):
+        """
+        Initialize network weights using He initialization.
+        
+        Applies to all linear layers:
+        - Weights: He initialization for ReLU activation
+        - Biases: Initialized to zero
+        """
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.kaiming_normal_(module.weight, nonlinearity='relu')
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0.0)
+
+    def forward(self, x):
+        """
+        Forward pass through the network.
+        
+        Args:
+            x (torch.Tensor): Input tensor of shape [batch_size, input_dim]
+                            or [input_dim] for single sample
+        
+        Returns:
+            torch.Tensor: Q-values for each action, shape [batch_size, output_dim]
+                         or [output_dim] for single sample
+                         
+        Raises:
+            TypeError: If input is not a torch.Tensor
+        """
+        # Input validation
+        if not isinstance(x, torch.Tensor):
+            raise TypeError("Input must be a torch.Tensor")
+            
+        # Handle single sample case during inference
+        if x.dim() == 1:
+            x = x.unsqueeze(0)  # Add batch dimension
+            
+        # Input layer
+        x = self.input_layer(x)
+        
+        # First residual block
+        identity = x
+        x = self.hidden_layer1(x)
+        x = F.relu(x + identity)
+        x = self.dropout(x)
+        
+        # Second residual block
+        identity = x
+        x = self.hidden_layer2(x)
+        x = F.relu(x + identity)
+        x = self.dropout(x)
+        
+        # Output layer
+        x = self.output_layer(x)
+        
+        # Remove batch dimension if it was added
+        if not self.training and x.size(0) == 1:
+            x = x.squeeze(0)
+            
+        return x
+
+
+class DQNAgent:
+    """
+    Deep Q-Network Agent for playing Wordle.
+    
+    Features:
+    - Maintains online and target networks for stable learning
+    - Uses epsilon-greedy exploration strategy
+    - Implements experience replay
+    - Supports both training and evaluation modes
+    - Tracks training statistics (loss, average Q-values)
+    
+    The agent learns to map state observations (feedback matrix + valid words)
+    to Q-values for each possible word in the dictionary.
+    """
+
+    def __init__(
+        self,
+        state_dim,
+        action_dim,
+        hidden_dim=256,
+        lr=1e-3,
+        gamma=0.99,
+        epsilon_start=1.0,
+        epsilon_end=0.1,
+        epsilon_decay=0.999,
+        target_update_freq=1000,
+        device=None
+    ):
+        """
+        Initialize the DQN agent.
+
+        Args:
+            state_dim (int): Dimension of the state vector
+            action_dim (int): Number of possible actions (dictionary size)
+            hidden_dim (int): Size of hidden layers in QNetwork
+            lr (float): Learning rate for Adam optimizer
+            gamma (float): Discount factor for future rewards
+            epsilon_start (float): Initial exploration rate
+            epsilon_end (float): Final exploration rate
+            epsilon_decay (float): Multiplicative decay factor for epsilon
+            target_update_freq (int): Steps between target network updates
+            device (str or torch.device): Device to use for tensor operations
+
+        Raises:
+            ValueError: If parameters are invalid (e.g., negative dimensions)
+        """
+        # Input validation
+        if state_dim <= 0 or action_dim <= 0:
+            raise ValueError("state_dim and action_dim must be positive")
+        if not (0 <= gamma <= 1):
+            raise ValueError("gamma must be between 0 and 1")
+        if not (0 <= epsilon_start <= 1) or not (0 <= epsilon_end <= 1):
+            raise ValueError("epsilon values must be between 0 and 1")
+        if not (0 < epsilon_decay <= 1):
+            raise ValueError("epsilon_decay must be between 0 and 1")
+        if target_update_freq <= 0:
+            raise ValueError("target_update_freq must be positive")
+            
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.gamma = gamma
+        self.epsilon = epsilon_start
+        self.epsilon_end = epsilon_end
+        self.epsilon_decay = epsilon_decay
+        self.target_update_freq = target_update_freq
+        self.device = device if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Statistics for monitoring
+        self.train_steps = 0
+        self.updates = 0
+        self.avg_loss = 0
+        self.avg_q = 0
+
+        # Build networks
+        self.online_net = QNetwork(state_dim, action_dim, hidden_dim).to(self.device)
+        self.target_net = QNetwork(state_dim, action_dim, hidden_dim).to(self.device)
+        self.target_net.load_state_dict(self.online_net.state_dict())
+        
+        # Freeze target network parameters
+        for param in self.target_net.parameters():
+            param.requires_grad = False
+
+        self.optimizer = optim.Adam(self.online_net.parameters(), lr=lr)
+
+    def select_action(self, state, valid_mask, eval_mode=False):
+        """
+        Select action using epsilon-greedy policy.
+        
+        Args:
+            state (np.ndarray or torch.Tensor): Current state observation
+            valid_mask (np.ndarray or list[bool]): Mask of valid actions
+            eval_mode (bool): If True, uses small epsilon for evaluation
+            
+        Returns:
+            int: Index of the selected action (word)
+            
+        Raises:
+            TypeError: If inputs have incorrect types
+            ValueError: If valid_mask length doesn't match action_dim
+        """
+        # Input validation
+        if not isinstance(valid_mask, (np.ndarray, list)):
+            raise TypeError("valid_mask must be a numpy array or list")
+        if len(valid_mask) != self.action_dim:
+            raise ValueError(f"valid_mask length ({len(valid_mask)}) must match action_dim ({self.action_dim})")
+            
+        # In eval mode, use a very small epsilon
+        if not eval_mode:
+            self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
+        
+        # Convert state to torch.Tensor if not already
+        if isinstance(state, np.ndarray):
+            state = torch.FloatTensor(state).to(self.device)
+        elif not isinstance(state, torch.Tensor):
+            raise TypeError("state must be either numpy array or torch tensor")
+            
+        # Add batch dimension if needed
+        if state.dim() == 1:
+            state = state.unsqueeze(0)
+
+        # Use a very small epsilon in eval mode
+        current_epsilon = 0.01 if eval_mode else self.epsilon
+
+        if random.random() > current_epsilon:
+            with torch.no_grad():
+                q_values = self.online_net(state)
+                
+                # Set Q-values of invalid actions to negative infinity
+                q_values = q_values.squeeze()
+                invalid_mask = ~torch.tensor(valid_mask, device=self.device)
+                q_values[invalid_mask] = float('-inf')
+                
+                # Update statistics
+                if not eval_mode:
+                    self.avg_q = 0.95 * self.avg_q + 0.05 * q_values.max().item()
+                
+                return q_values.argmax().item()
+        else:
+            # Random choice from valid actions
+            valid_indices = np.where(valid_mask)[0]
+            return random.choice(valid_indices)
+
+    def learn(self, batch):
+        """
+        Update the Q-network using a batch of transitions.
+        
+        Args:
+            batch (dict): Batch of transitions with keys:
+                - states (torch.Tensor): Current states
+                - actions (torch.Tensor): Actions taken
+                - rewards (torch.Tensor): Rewards received
+                - next_states (torch.Tensor): Next states
+                - dones (torch.Tensor): Episode termination flags
+        
+        Returns:
+            float: The loss value for this update
+        """
+        states = torch.tensor(batch['states'], device=self.device)
+        actions = torch.tensor(batch['actions'], device=self.device)
+        rewards = torch.tensor(batch['rewards'], device=self.device)
+        next_states = torch.tensor(batch['next_states'], device=self.device)
+        dones = torch.tensor(batch['dones'], device=self.device)
+
+        # Compute current Q values
+        current_q_values = self.online_net(states).gather(1, actions.unsqueeze(1))
+
+        # Double DQN: use online network to select actions, target network to evaluate them
+        with torch.no_grad():
+            # Select actions using online network
+            online_next_q_values = self.online_net(next_states)
+            best_actions = online_next_q_values.argmax(dim=1, keepdim=True)
+            
+            # Evaluate Q-values using target network
+            next_q_values = self.target_net(next_states)
+            max_next_q_values = next_q_values.gather(1, best_actions)
+            
+            # Compute target Q values
+            target_q_values = rewards.unsqueeze(1) + (1 - dones.unsqueeze(1)) * self.gamma * max_next_q_values
+
+        # Compute loss and update
+        loss = F.smooth_l1_loss(current_q_values, target_q_values)  # Huber loss for stability
+        
+        # Update statistics
+        self.avg_loss = 0.95 * self.avg_loss + 0.05 * loss.item()
+        self.train_steps += 1
+        
+        self.optimizer.zero_grad()
+        loss.backward()
+        # Clip gradients for stability
+        torch.nn.utils.clip_grad_norm_(self.online_net.parameters(), max_norm=10)
+        self.optimizer.step()
+
+        # Update target network if it's time
+        if self.train_steps % self.target_update_freq == 0:
+            self.target_net.load_state_dict(self.online_net.state_dict())
+            self.updates += 1
+
+        return loss.item()
+    
+    def get_statistics(self):
+        """Return current training statistics."""
+        return {
+            'train_steps': self.train_steps,
+            'updates': self.updates,
+            'epsilon': self.epsilon,
+            'avg_loss': self.avg_loss,
+            'avg_q': self.avg_q
+        }
+        
+    def save(self, path):
+        """Save the online network state dict."""
+        torch.save({
+            'online_net': self.online_net.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'train_steps': self.train_steps,
+            'epsilon': self.epsilon,
+            'statistics': self.get_statistics()
+        }, path)
+        
+    def load(self, path):
+        """Load a saved state dict."""
+        checkpoint = torch.load(path, map_location=self.device)
+        self.online_net.load_state_dict(checkpoint['online_net'])
+        self.target_net.load_state_dict(checkpoint['online_net'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        self.train_steps = checkpoint['train_steps']
+        self.epsilon = checkpoint['epsilon']
+        
+        # Restore statistics if available
+        if 'statistics' in checkpoint:
+            stats = checkpoint['statistics']
+            self.updates = stats.get('updates', 0)
+            self.avg_loss = stats.get('avg_loss', 0)
+            self.avg_q = stats.get('avg_q', 0)
+
+================================================================================
+FILE: data_split.py
+================================================================================
+
+import random
+
+def load_words(filename):
+    with open(filename, 'r') as f:
+        return [line.strip() for line in f if line.strip()]
+
+def save_words(words, filename):
+    with open(filename, 'w') as f:
+        for word in words:
+            f.write(word + '\n')
+
+def main():
+    # Load all words
+    all_words = load_words('data/trainlist')
+    
+    # Shuffle the words
+    random.seed(42)  # For reproducibility
+    random.shuffle(all_words)
+    
+    # Split into train (500) and test (500)
+    train_words = all_words[:500]
+    test_words = all_words[500:1000]
+    
+    # Save to separate files
+    save_words(train_words, 'data/train_words.txt')
+    save_words(test_words, 'data/test_words.txt')
+    
+    print(f"Total words: {len(all_words)}")
+    print(f"Training words: {len(train_words)}")
+    print(f"Test words: {len(test_words)}")
+
+if __name__ == "__main__":
+    main()
+
+================================================================================
+FILE: environment.py
+================================================================================
+
+"""
+Wordle environment implementation for reinforcement learning.
+Provides a Gym-like interface for the Wordle game, including:
+- State representation as a 3D feedback matrix
+- Action space as valid word indices
+- Reward function based on game outcome and guess quality
+- Feedback generation for guesses
+"""
+
+import numpy as np
+
+class WordleEnvironment:
+    """
+    A simple Wordle-like environment for reinforcement learning.
+    """
+
+    def __init__(self, valid_words, max_guesses=6):
+        """
+        Args:
+            valid_words (list[str]): List of valid words (both solutions & guesses).
+            max_guesses (int): Maximum number of guesses allowed per episode.
+        """
+        if not isinstance(valid_words, list) or not all(isinstance(w, str) for w in valid_words):
+            raise ValueError("valid_words must be a list of strings")
+        if not all(len(w) == 5 for w in valid_words):
+            raise ValueError("all words must be 5 letters long")
+        if max_guesses <= 0:
+            raise ValueError("max_guesses must be positive")
+            
+        self.valid_words = valid_words  # Master list of all valid guessable words
+        self.max_guesses = max_guesses
+
+        # Internal state
+        self.secret_word = None
+        self.remaining_guesses = None
+        self.done = False
+        self.last_reward = 0.0  # Track the last reward
+
+        # Track a mask of which words are still valid given feedback so far
+        # We'll store this as a boolean array of length len(valid_words)
+        self.valid_mask = None
+
+        # Store the feedback matrix from the most recent guess
+        self.last_feedback_matrix = None
+
+    def reset(self, secret_word):
+        """
+        Resets the environment state for a new puzzle.
+
+        Args:
+            secret_word (str): The word to be guessed this episode.
+
+        Returns:
+            feedback_matrix (np.ndarray): 5x26x3 matrix of letter feedback
+            valid_mask (np.ndarray): Boolean mask of valid words
+            remaining_guesses (int): Number of guesses remaining
+        """
+        if not isinstance(secret_word, str) or len(secret_word) != 5:
+            raise ValueError("secret_word must be a 5-letter string")
+        if secret_word not in self.valid_words:
+            raise ValueError("secret_word must be in valid_words list")
+            
+        self.secret_word = secret_word
+        self.remaining_guesses = self.max_guesses
+        self.done = False
+        self.last_reward = 0.0  # Reset last reward
+
+        # Initially, all words could be valid solutions
+        self.valid_mask = np.ones(len(self.valid_words), dtype=bool)
+
+        # No feedback yet, so we'll use an all-zeros 5x26x3 matrix
+        self.last_feedback_matrix = np.zeros((5, 26, 3), dtype=np.float32)
+
+        return self.last_feedback_matrix, self.valid_mask, self.remaining_guesses
+
+    def step(self, guess):
+        """
+        Executes one guess in the game.
+
+        Args:
+            guess (str): The word guessed by the agent.
+
+        Returns:
+            feedback_matrix (np.ndarray): 5x26x3 matrix of letter feedback
+            valid_mask (np.ndarray): Boolean mask of valid words
+            remaining_guesses (int): Number of guesses remaining
+            reward (float): Reward from this guess
+            done (bool): Whether the episode has ended
+        """
+        if not isinstance(guess, str) or len(guess) != 5:
+            raise ValueError("guess must be a 5-letter string")
+        if guess not in self.valid_words:
+            raise ValueError("guess must be in valid_words list")
+            
+        # Compute feedback & reward
+        feedback_string = self._compute_feedback_string(guess, self.secret_word)
+        feedback_matrix = self._compute_feedback_matrix(guess, feedback_string)
+
+        # Visualize feedback
+        feedback_str = ""
+        for i, (letter, feedback) in enumerate(zip(guess, feedback_string)):
+            if feedback == 'G':  # Correct position
+                feedback_str += f"\033[92m{letter}\033[0m"  # Green
+            elif feedback == 'Y':  # Wrong position
+                feedback_str += f"\033[93m{letter}\033[0m"  # Yellow
+            else:  # Not in word
+                feedback_str += f"\033[90m{letter}\033[0m"  # Gray
+        print(f"Feedback: {feedback_str}")
+
+        # Update reward structure:
+        # +2 for each green letter (correct position)
+        # +1 for each yellow letter (correct letter, wrong position)
+        # -0.1 for each gray letter to encourage efficiency
+        # +10 bonus for solving the puzzle
+        green_count = sum(f == 'G' for f in feedback_string)
+        yellow_count = sum(f == 'Y' for f in feedback_string)
+        gray_count = sum(f == 'B' for f in feedback_string)
+        
+        reward = (2 * green_count) + yellow_count - (0.1 * gray_count)
+        
+        if guess == self.secret_word:
+            # Bonus for solving + extra points for solving quickly
+            reward += 10 + (self.remaining_guesses * 2)
+
+        # Store the reward
+        self.last_reward = reward
+
+        # Update environment state
+        self.remaining_guesses -= 1
+        self.last_feedback_matrix = feedback_matrix
+
+        # If the guess is exactly the secret word, we consider it solved
+        if guess == self.secret_word:
+            self.done = True
+        elif self.remaining_guesses <= 0:
+            self.done = True
+
+        # Update valid_mask based on new feedback
+        self._update_valid_mask(guess, feedback_string)
+
+        return self.last_feedback_matrix, self.valid_mask, self.remaining_guesses, reward, self.done
+
+    def _compute_feedback_string(self, guess, target):
+        """
+        Compute Wordle-style feedback for a guess.
+        Returns a string of length 5 with:
+            'G' for correct letter in correct position (green)
+            'Y' for correct letter in wrong position (yellow)
+            'B' for incorrect letter (black/gray)
+        """
+        feedback = ['B'] * 5
+        target_chars = list(target)
+        guess_chars = list(guess)
+
+        # First pass: mark all correct positions (green)
+        for i in range(5):
+            if guess_chars[i] == target_chars[i]:
+                feedback[i] = 'G'
+                target_chars[i] = None  # Mark as used
+                guess_chars[i] = None
+
+        # Second pass: mark correct letters in wrong positions (yellow)
+        for i in range(5):
+            if guess_chars[i] is None:  # Skip already marked positions
+                continue
+            for j in range(5):
+                if target_chars[j] is not None and guess_chars[i] == target_chars[j]:
+                    feedback[i] = 'Y'
+                    target_chars[j] = None  # Mark as used
+                    break
+
+        return ''.join(feedback)
+
+    def _compute_feedback_matrix(self, guess, feedback_string):
+        """
+        Convert a guess and its feedback into a 5x26x3 matrix.
+        Each position has a 26-dim one-hot vector for the letter,
+        and a 3-dim one-hot vector for the feedback type (gray/yellow/green).
+        """
+        matrix = np.zeros((5, 26, 3), dtype=np.float32)
+        
+        for i, (letter, feedback) in enumerate(zip(guess, feedback_string)):
+            letter_idx = ord(letter.lower()) - ord('a')
+            matrix[i, letter_idx, 0] = feedback == 'B'  # gray
+            matrix[i, letter_idx, 1] = feedback == 'Y'  # yellow
+            matrix[i, letter_idx, 2] = feedback == 'G'  # green
+            
+        return matrix
+
+    def _update_valid_mask(self, guess, feedback_string):
+        """
+        Update the valid_mask based on the feedback received for a guess.
+        This eliminates words that couldn't be the answer given the feedback.
+        """
+        for i, word in enumerate(self.valid_words):
+            if not self.valid_mask[i]:  # Skip already invalid words
+                continue
+            # A word remains valid only if it would give the same feedback
+            test_feedback = self._compute_feedback_string(guess, word)
+            if test_feedback != feedback_string:
+                self.valid_mask[i] = False
+
+    def is_done(self):
+        """Convenience method for external checks."""
+        return self.done
+
+================================================================================
+FILE: main.py
+================================================================================
+
+"""
+Main entry point for training and testing the Wordle DQN agent.
+Provides command-line interface for running different modes of operation
+and managing model files.
+"""
+
+import argparse
+import torch
+from train import train
+from test import test
+
+def load_words(filename):
+    """
+    Load words from a text file.
+    
+    Args:
+        filename (str): Path to the text file containing words
+        
+    Returns:
+        list[str]: List of words from the file
+    """
+    with open(filename, 'r') as f:
+        return [line.strip() for line in f if line.strip()]
+
+def parse_args():
+    """
+    Parse command line arguments.
+    
+    Returns:
+        argparse.Namespace: Parsed command line arguments containing:
+            - mode: 'train' or 'test'
+            - model_path: path to save/load model
+            - train_words: path to training words file
+            - test_words: path to test words file
+            - num_episodes: number of training episodes
+            - hidden_dim: hidden layer dimension
+            - batch_size: training batch size
+            - learning_rate: optimizer learning rate
+            - device: 'cuda' or 'cpu'
+    """
+    parser = argparse.ArgumentParser(description='Train or test the Wordle DQN agent')
+    parser.add_argument("--mode", choices=["train", "test"], required=True)
+    parser.add_argument("--model_path", type=str, default="dqn_model.pth")
+    parser.add_argument("--train_words", type=str, default="data/train_words.txt")
+    parser.add_argument("--test_words", type=str, default="data/test_words.txt")
+    parser.add_argument("--num_episodes", type=int, default=5000)
+    parser.add_argument("--hidden_dim", type=int, default=256)
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--learning_rate", type=float, default=1e-3)
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    return parser.parse_args()
+
+def main():
+    """
+    Main function to run training or testing of the Wordle DQN agent.
+    Handles command line arguments and executes the appropriate mode
+    of operation (training or testing).
+    """
+    args = parse_args()
+    
+    # Load appropriate word lists
+    if args.mode == "train":
+        train_words = load_words(args.train_words)
+        print(f"Loaded {len(train_words)} training words")
+        
+        trained_agent = train(
+            valid_words=train_words,
+            num_episodes=args.num_episodes,
+            hidden_dim=args.hidden_dim,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            device=args.device
+        )
+        
+        # Save model
+        trained_agent.online_net.cpu()
+        torch.save(trained_agent.online_net.state_dict(), args.model_path)
+        print(f"Model saved to {args.model_path}")
+
+    elif args.mode == "test":
+        # For testing, we need both train and test words
+        train_words = load_words(args.train_words)  # For valid guesses
+        test_words = load_words(args.test_words)    # For secret words
+        print(f"Loaded {len(train_words)} training words and {len(test_words)} test words")
+        
+        success_rate, avg_guesses = test(
+            train_words=train_words,  # Words the agent can use as guesses
+            test_words=test_words,    # Words to test on
+            model_path=args.model_path,
+            hidden_dim=args.hidden_dim,
+            device=args.device
+        )
+        
+        print(f"\nTest Results:")
+        print(f"Success Rate: {success_rate:.1f}%")
+        print(f"Average Guesses (when solved): {avg_guesses:.2f}")
+
+if __name__ == "__main__":
+    main()
+
+================================================================================
+FILE: play_games.py
+================================================================================
+
+"""
+Interactive script for playing Wordle with the trained DQN agent.
+Allows visualization of the agent's decision-making process and provides
+colored feedback for guesses.
+"""
+
+import random
+import numpy as np
+import torch
+from environment import WordleEnvironment
+from agent import DQNAgent
+from train_minimal import flatten_state
+
+def colorize_feedback(guess, feedback_string):
+    """
+    Convert feedback string to colored output.
+    
+    Args:
+        guess (str): The guessed word
+        feedback_string (str): The feedback string from the environment
+        
+    Returns:
+        str: The colored feedback string
+    """
+    """Convert feedback string to colored output."""
+    result = []
+    for letter, fb in zip(guess, feedback_string):
+        if fb == 'G':
+            result.append(f'\033[92m{letter}\033[0m')  # Green
+        elif fb == 'Y':
+            result.append(f'\033[93m{letter}\033[0m')  # Yellow
+        else:
+            result.append(f'\033[90m{letter}\033[0m')  # Gray
+    return ' '.join(result)
+
+def print_known_letters(feedback_matrix):
+    """
+    Print known letter information from feedback matrix.
+    
+    Args:
+        feedback_matrix (numpy array): The feedback matrix from the environment
+    """
+    """Print known letter information from feedback matrix."""
+    alphabet = 'abcdefghijklmnopqrstuvwxyz'
+    green_letters = []
+    yellow_letters = []
+    gray_letters = []
+    
+    for i in range(26):  # For each letter
+        for pos in range(5):  # For each position
+            if feedback_matrix[pos, i, 0] > 0:  # Green
+                green_letters.append(f"{alphabet[i].upper()} at position {pos+1}")
+            elif feedback_matrix[pos, i, 1] > 0:  # Yellow
+                yellow_letters.append(alphabet[i].upper())
+            elif feedback_matrix[pos, i, 2] > 0:  # Gray
+                gray_letters.append(alphabet[i].upper())
+    
+    print("Known information:")
+    if green_letters:
+        print("  Correct positions:", ', '.join(green_letters))
+    if yellow_letters:
+        print("  Correct letters:", ', '.join(set(yellow_letters)))
+    if gray_letters:
+        print("  Incorrect letters:", ', '.join(set(gray_letters)))
+
+def play_game(env, agent, secret_word):
+    """
+    Play a single game of Wordle with visualization.
+    
+    Args:
+        env (WordleEnvironment): The Wordle environment instance
+        agent (DQNAgent): The trained DQN agent
+        secret_word (str): The target word to guess
+        
+    Returns:
+        tuple: (solved, num_guesses, guesses, feedbacks) - Whether the word was solved, number of guesses used, guesses, and feedbacks
+    """
+    """Play a single game and return the number of guesses and if solved."""
+    feedback_matrix, valid_mask, remaining_guesses = env.reset(secret_word)
+    print(f"\nTarget word: {secret_word}")
+    print("-" * 40)
+    
+    guesses = []
+    feedbacks = []
+    solved = False
+    
+    while True:
+        print_known_letters(feedback_matrix)
+        print(f"Remaining guesses: {remaining_guesses}")
+        
+        # Get agent's action
+        state = flatten_state(feedback_matrix, valid_mask, remaining_guesses)
+        action = agent.select_action(state, valid_mask)
+        guess = env.valid_words[action]
+        
+        # Take step in environment
+        next_feedback_matrix, next_valid_mask, next_remaining_guesses, reward, done = env.step(guess)
+        
+        # Get feedback string for visualization
+        feedback_string = env._compute_feedback_string(guess, secret_word)
+        guesses.append(guess)
+        feedbacks.append(feedback_string)
+        
+        # Print the guess and feedback
+        print(f"\nGuess {6-remaining_guesses}: {colorize_feedback(guess, feedback_string)}")
+        
+        if done:
+            solved = (guess == secret_word)
+            if solved:
+                print(f"\n✨ Solved in {6-remaining_guesses} guesses!")
+            else:
+                print(f"\n❌ Failed to solve. The word was: {secret_word}")
+            break
+            
+        feedback_matrix = next_feedback_matrix
+        valid_mask = next_valid_mask
+        remaining_guesses = next_remaining_guesses
+    
+    return solved, 6-remaining_guesses, guesses, feedbacks
+
+def main():
+    """
+    Main function to set up the environment and agent for interactive gameplay.
+    Loads the trained model and allows playing multiple games while visualizing
+    the agent's decision process.
+    """
+    # Load test words (using the same set as training)
+    with open('data/train_words.txt', 'r') as f:
+        all_words = [line.strip() for line in f if line.strip()][:50]  # Use only first 50 words
+    test_words = random.sample(all_words, 10)  # Randomly sample 10 words to test
+    
+    # Initialize environment and agent
+    env = WordleEnvironment(valid_words=all_words, max_guesses=6)
+    state_dim = 390 + len(all_words) + 1  # feedback_matrix + valid_mask + remaining_guesses
+    action_dim = len(all_words)
+    
+    agent = DQNAgent(
+        state_dim=state_dim,
+        action_dim=action_dim,
+        hidden_dim=64,
+        device="cpu"
+    )
+    
+    # Load the trained model
+    agent.load("dqn_model_minimal.pth")
+    
+    # Play 10 games
+    total_games = 10
+    solved_games = 0
+    total_guesses = 0
+    
+    print(f"\nPlaying {total_games} games...")
+    print("=" * 50)
+    
+    for i in range(total_games):
+        secret_word = test_words[i]
+        solved, num_guesses, guesses, feedbacks = play_game(env, agent, secret_word)
+        
+        if solved:
+            solved_games += 1
+            total_guesses += num_guesses
+    
+    # Print statistics
+    print("\nFinal Statistics:")
+    print(f"Games played: {total_games}")
+    print(f"Games solved: {solved_games}")
+    print(f"Success rate: {(solved_games/total_games)*100:.1f}%")
+    if solved_games > 0:
+        print(f"Average guesses when solved: {total_guesses/solved_games:.1f}")
+
+if __name__ == "__main__":
+    main()
+
+================================================================================
+FILE: replay_buffer.py
+================================================================================
+
+"""
+Experience replay buffer implementation for DQN training.
+Provides efficient storage and sampling of transitions (state, action, reward, next_state, done)
+using numpy arrays. Implements FIFO behavior when buffer is full.
+"""
+
+import numpy as np
+
+class ReplayBuffer:
+    """
+    A simple FIFO experience replay buffer for Q-learning.
+    Stores transitions using numpy arrays for efficient sampling and memory usage.
+    When buffer is full, oldest transitions are replaced first.
+    """
+
+    def __init__(self, max_size, state_dim):
+        """
+        Initialize replay buffer with fixed maximum size.
+
+        Args:
+            max_size (int): Maximum number of transitions to store
+            state_dim (int): Dimension of the flattened state vector
+                           (for example, 390 + dictionary_size + 1)
+
+        Raises:
+            ValueError: If max_size or state_dim are not positive
+        """
+        if max_size <= 0:
+            raise ValueError("max_size must be positive")
+        if state_dim <= 0:
+            raise ValueError("state_dim must be positive")
+            
+        self.max_size = max_size
+        self.state_dim = state_dim
+
+        # Create numpy arrays to hold each component of the transition
+        self.states = np.zeros((max_size, state_dim), dtype=np.float32)
+        self.next_states = np.zeros((max_size, state_dim), dtype=np.float32)
+        self.actions = np.zeros((max_size,), dtype=np.int64)
+        self.rewards = np.zeros((max_size,), dtype=np.float32)
+        self.dones = np.zeros((max_size,), dtype=np.float32)
+
+        self.ptr = 0        # Current insert pointer
+        self.size = 0       # Current number of stored transitions
+
+    def add(self, state, action, reward, next_state, done):
+        """
+        Add a transition to the buffer.
+        
+        Args:
+            state (np.ndarray): Current state vector [state_dim]
+            action (int): Action index taken
+            reward (float): Reward received
+            next_state (np.ndarray): Next state vector [state_dim]
+            done (bool): Whether episode ended after this transition
+            
+        Raises:
+            ValueError: If inputs have incorrect shapes or types
+            
+        Notes:
+            When buffer is full, oldest transitions are overwritten first
+        """
+        # Input validation
+        if not isinstance(state, np.ndarray) or state.shape != (self.state_dim,):
+            raise ValueError(f"state must be a numpy array of shape ({self.state_dim},)")
+        if not isinstance(next_state, np.ndarray) or next_state.shape != (self.state_dim,):
+            raise ValueError(f"next_state must be a numpy array of shape ({self.state_dim},)")
+        if not isinstance(action, (int, np.integer)):
+            raise ValueError("action must be an integer")
+        if not isinstance(reward, (float, np.floating)):
+            raise ValueError("reward must be a float")
+        if not isinstance(done, bool):
+            raise ValueError("done must be a boolean")
+
+        idx = self.ptr
+
+        # Convert inputs to correct types if needed
+        self.states[idx] = state.astype(np.float32)
+        self.actions[idx] = int(action)
+        self.rewards[idx] = float(reward)
+        self.next_states[idx] = next_state.astype(np.float32)
+        self.dones[idx] = float(done)
+
+        self.ptr = (self.ptr + 1) % self.max_size
+        self.size = min(self.size + 1, self.max_size)
+
+    def sample(self, batch_size):
+        """
+        Sample a batch of transitions randomly.
+        
+        Args:
+            batch_size (int): Number of transitions to sample
+            
+        Returns:
+            tuple: (states, actions, rewards, next_states, dones) where:
+                - states: np.ndarray [batch_size, state_dim]
+                - actions: np.ndarray [batch_size]
+                - rewards: np.ndarray [batch_size]
+                - next_states: np.ndarray [batch_size, state_dim]
+                - dones: np.ndarray [batch_size]
+                
+        Raises:
+            ValueError: If batch_size > current buffer size
+        """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        if self.size == 0:
+            raise ValueError("Cannot sample from an empty buffer")
+        if batch_size > self.size:
+            raise ValueError(f"Cannot sample {batch_size} transitions, buffer only has {self.size}")
+
+        indices = np.random.randint(0, self.size, size=batch_size)
+
+        batch = {
+            'states': self.states[indices],
+            'actions': self.actions[indices],
+            'rewards': self.rewards[indices],
+            'next_states': self.next_states[indices],
+            'dones': self.dones[indices],
+        }
+        return batch
+        
+    def __len__(self):
+        """Returns the current size of the buffer."""
+        return self.size
+
+================================================================================
+FILE: test.py
+================================================================================
+
+"""
+Testing module for the Wordle DQN agent.
+Implements evaluation procedures for assessing the agent's performance
+on unseen test words. Provides detailed statistics on solve rate,
+average guesses needed, and distribution of guess counts.
+"""
+
+import random
+import numpy as np
+import torch
+from environment import WordleEnvironment
+from agent import DQNAgent
+from train import flatten_state
+from collections import defaultdict
+
+def test(
+    train_words,  # Words the agent can use as guesses
+    test_words,   # Words to test on
+    model_path="dqn_model.pth",
+    hidden_dim=256,
+    device="cpu"
+):
+    """
+    Evaluate a trained DQNAgent on a set of unseen words.
+
+    Args:
+        train_words (list[str]): List of valid words the agent can use as guesses
+        test_words (list[str]): List of words to test the agent on
+        model_path (str): Path to the saved model file
+        hidden_dim (int): Hidden dimension of the QNetwork (must match training)
+        device (str): "cpu" or "cuda" for running the model inference
+
+    Returns:
+        tuple: (success_rate, avg_guesses, metrics) where:
+            - success_rate (float): Percentage of words solved
+            - avg_guesses (float): Average number of guesses for solved words
+            - metrics (dict): Additional metrics including:
+                - guess_distribution: Dictionary mapping number of guesses to count
+                - num_solved: Total number of words solved
+                - total_words: Total number of words attempted
+    """
+    # Create environment with training words as valid guesses
+    env = WordleEnvironment(valid_words=train_words, max_guesses=6)
+
+    # Initialize agent
+    state_dim = 390 + len(train_words) + 1
+    action_dim = len(train_words)
+
+    agent = DQNAgent(
+        state_dim=state_dim,
+        action_dim=action_dim,
+        hidden_dim=hidden_dim,
+        lr=1e-3,
+        gamma=0.99,
+        epsilon_start=0.01,  # Small epsilon for some exploration
+        epsilon_end=0.01,
+        epsilon_decay=1.0,
+        target_update_freq=1000,
+        device=device
+    )
+
+    # Load trained weights
+    agent.online_net.load_state_dict(torch.load(model_path, map_location=device))
+    agent.online_net.eval()  # Set to evaluation mode
+
+    # Evaluation metrics
+    total_words = len(test_words)
+    solved_words = 0
+    total_guesses = 0
+    guess_distribution = defaultdict(int)  # Track number of guesses needed
+    letter_accuracy = defaultdict(list)    # Track accuracy by position
+    common_first_guesses = defaultdict(int)  # Track most common first guesses
+    
+    print("\nStarting evaluation...")
+    
+    for i, test_word in enumerate(test_words, 1):
+        if i % 50 == 0:
+            print(f"Testing word {i}/{total_words}...")
+            
+        feedback_matrix, valid_mask, remaining_guesses = env.reset(test_word)
+        state = flatten_state(feedback_matrix, valid_mask, remaining_guesses)
+        
+        guesses = []
+        solved = False
+        
+        while True:
+            action = agent.select_action(state, valid_mask, eval_mode=True)
+            guess = train_words[action]
+            guesses.append(guess)
+            
+            if len(guesses) == 1:
+                common_first_guesses[guess] += 1
+            
+            if guess == test_word:
+                solved = True
+                solved_words += 1
+                num_guesses = len(guesses)
+                total_guesses += num_guesses
+                guess_distribution[num_guesses] += 1
+                break
+                
+            if env.done:
+                guess_distribution['X'] += 1  # Mark unsolved puzzles
+                break
+                
+            next_feedback_matrix, next_valid_mask, next_remaining_guesses = env.step(guess)
+            state = flatten_state(next_feedback_matrix, next_valid_mask, next_remaining_guesses)
+            
+            # Record letter accuracy
+            for pos, (guess_letter, true_letter) in enumerate(zip(guess, test_word)):
+                letter_accuracy[pos].append(guess_letter == true_letter)
+    
+    # Calculate metrics
+    success_rate = (solved_words / total_words) * 100
+    avg_guesses = total_guesses / solved_words if solved_words > 0 else 6.0
+    
+    # Print detailed results
+    print("\nDetailed Evaluation Results:")
+    print(f"Success Rate: {success_rate:.1f}%")
+    print(f"Average Guesses (when solved): {avg_guesses:.2f}")
+    
+    print("\nGuess Distribution:")
+    for guesses, count in sorted(guess_distribution.items()):
+        if guesses == 'X':
+            print(f"Failed: {count} words")
+        else:
+            print(f"{guesses} guesses: {count} words ({count/total_words*100:.1f}%)")
+    
+    print("\nLetter Accuracy by Position:")
+    for pos, accuracies in letter_accuracy.items():
+        avg_accuracy = sum(accuracies) / len(accuracies) * 100
+        print(f"Position {pos+1}: {avg_accuracy:.1f}%")
+    
+    print("\nTop 5 First Guesses:")
+    top_guesses = sorted(common_first_guesses.items(), key=lambda x: x[1], reverse=True)[:5]
+    for guess, count in top_guesses:
+        print(f"{guess}: {count} times ({count/total_words*100:.1f}%)")
+    
+    metrics = {
+        "guess_distribution": dict(guess_distribution),
+        "num_solved": solved_words,
+        "total_words": total_words
+    }
+    
+    return success_rate, avg_guesses, metrics
+
+if __name__ == "__main__":
+    # Example usage with proper word lists
+    def load_words(filename):
+        """
+        Load words from a text file, one word per line.
+        
+        Args:
+            filename (str): Path to the word list file
+        
+        Returns:
+            list[str]: List of words from the file
+        """
+        with open(filename, 'r') as f:
+            return [line.strip() for line in f if line.strip()]
+    
+    train_words = load_words('data/train_words.txt')
+    test_words = load_words('data/test_words.txt')
+    
+    success_rate, avg_guesses, metrics = test(
+        train_words=train_words,
+        test_words=test_words,
+        model_path="dqn_model.pth"
+    )
+
+================================================================================
+FILE: train.py
+================================================================================
+
+"""
+Training module for the Wordle DQN agent.
+Implements the training loop, experience replay, and evaluation procedures
+for the deep Q-learning agent. Includes functionality for periodic evaluation
+and model checkpointing.
+"""
+
+import random
+import numpy as np
+import torch
+from environment import WordleEnvironment
+from agent import DQNAgent
+from replay_buffer import ReplayBuffer
+from tqdm import tqdm
+
+def flatten_state(feedback_matrix, valid_mask, remaining_guesses):
+    """
+    Convert the environment state into a 1D vector for neural network input.
+    
+    Args:
+        feedback_matrix (np.ndarray): 5x26x3 matrix of letter feedback
+            - First dimension (5): Letter positions
+            - Second dimension (26): Letters of the alphabet
+            - Third dimension (3): Feedback type [correct, present, absent]
+        valid_mask (np.ndarray): Boolean mask of valid words in dictionary
+        remaining_guesses (int): Number of guesses remaining
+        
+    Returns:
+        np.ndarray: Flattened state vector concatenating:
+            - Flattened feedback matrix (5*26*3 = 390 elements)
+            - Valid word mask (dictionary_size elements)
+            - Remaining guesses (1 element)
+    """
+    # Ensure inputs are numpy arrays
+    feedback_matrix = np.asarray(feedback_matrix)
+    valid_mask = np.asarray(valid_mask)
+    
+    # Flatten and convert to float32
+    feedback_flat = feedback_matrix.reshape(-1).astype(np.float32)
+    valid_mask_float = valid_mask.astype(np.float32)
+    remaining_guesses_float = np.array([float(remaining_guesses)], dtype=np.float32)
+    
+    return np.concatenate([feedback_flat, valid_mask_float, remaining_guesses_float])
+
+def train(
+    valid_words,
+    test_words,
+    num_episodes=10000,
+    hidden_dim=256,
+    learning_rate=1e-4,
+    gamma=0.99,
+    epsilon_start=1.0,
+    epsilon_end=0.01,
+    epsilon_decay=0.995,
+    batch_size=64,
+    target_update_freq=100,
+    eval_freq=100,
+    eval_episodes=100,
+    device="cpu"
+):
+    """
+    Train a DQN agent to play Wordle using deep Q-learning.
+    
+    Args:
+        valid_words (list[str]): List of valid words for training
+        test_words (list[str]): List of words to use for evaluation
+        num_episodes (int): Total number of training episodes
+        hidden_dim (int): Size of hidden layers in Q-network
+        learning_rate (float): Learning rate for optimizer
+        gamma (float): Discount factor for future rewards
+        epsilon_start (float): Initial exploration rate
+        epsilon_end (float): Final exploration rate
+        epsilon_decay (float): Decay rate for epsilon
+        batch_size (int): Size of training batches
+        target_update_freq (int): Steps between target network updates
+        eval_freq (int): Episodes between evaluations
+        eval_episodes (int): Number of episodes for each evaluation
+        device (str): Device to use for training ("cpu" or "cuda")
+        
+    Returns:
+        DQNAgent: The trained agent
+        
+    Notes:
+        - Uses experience replay for stable learning
+        - Implements epsilon-greedy exploration
+        - Periodically evaluates on test set
+        - Saves best model based on evaluation performance
+    """
+    # Initialize training environment with only training words
+    env = WordleEnvironment(valid_words=valid_words, max_guesses=6)
+    
+    # State dimension includes feedback matrix (390), valid mask for valid words, and remaining guesses (1)
+    state_dim = 390 + len(valid_words) + 1
+    action_dim = len(valid_words)  # Actions are indices into valid_words
+    
+    agent = DQNAgent(
+        state_dim=state_dim,
+        action_dim=action_dim,
+        hidden_dim=hidden_dim,
+        lr=learning_rate,
+        gamma=gamma,
+        epsilon_start=epsilon_start,
+        epsilon_end=epsilon_end,
+        epsilon_decay=epsilon_decay,
+        target_update_freq=target_update_freq,
+        device=device
+    )
+    
+    # Initialize replay buffer with correct state dimension
+    replay_buffer = ReplayBuffer(max_size=10000, state_dim=state_dim)
+    
+    # Metrics tracking
+    episode_rewards = []
+    episode_lengths = []
+    solved_episodes = 0
+    eval_solve_rates = []
+    running_avg_reward = []
+    running_avg_length = []
+    best_solved_rate = 0
+    
+    # Progress tracking
+    progress_bar = tqdm(range(num_episodes), desc="Training Progress")
+    running_solve_rate = 0
+    running_reward = 0
+    
+    print("\nStarting training...")
+    print("Episode | Solved | Avg Reward | Epsilon")
+    print("-" * 45)
+    
+    # Training loop
+    for episode in progress_bar:
+        secret_word = random.choice(valid_words)  # Only train on training words
+        feedback_matrix, valid_mask, remaining_guesses = env.reset(secret_word)
+        
+        state = flatten_state(feedback_matrix, valid_mask, remaining_guesses)
+        
+        episode_reward = 0
+        episode_length = 0
+        solved = False
+        
+        # Episode loop
+        while True:
+            # Select action using valid mask
+            action = agent.select_action(state, valid_mask)
+            guess = valid_words[action]
+            
+            # Take step
+            feedback_matrix, valid_mask, remaining_guesses, reward, done = env.step(guess)
+            state = flatten_state(feedback_matrix, valid_mask, remaining_guesses)
+            
+            # Store transition
+            replay_buffer.add(state, action, reward, state, done)
+            
+            episode_reward += reward
+            episode_length += 1
+            
+            # Train if we have enough samples
+            if replay_buffer.size >= batch_size:
+                batch = replay_buffer.sample(batch_size)
+                loss = agent.learn(batch)
+            
+            if done:
+                if guess == secret_word:
+                    solved_episodes += 1
+                    solved = True
+                break
+            
+        # Update metrics
+        episode_rewards.append(episode_reward)
+        episode_lengths.append(episode_length)
+        
+        # Update running averages
+        window = min(100, len(episode_rewards))
+        avg_reward = np.mean(episode_rewards[-window:])
+        avg_length = np.mean(episode_lengths[-window:])
+        running_avg_reward.append(avg_reward)
+        running_avg_length.append(avg_length)
+        
+        # Update progress tracking
+        running_solve_rate = solved_episodes / (episode + 1) * 100
+        running_reward = avg_reward
+        
+        # Update progress bar
+        progress_bar.set_postfix({
+            'Solve Rate': f'{running_solve_rate:.1f}%',
+            'Avg Reward': f'{running_reward:.1f}',
+            'Epsilon': f'{agent.epsilon:.3f}'
+        })
+        
+        # Print detailed stats periodically
+        if (episode + 1) % 100 == 0:
+            print(f"{episode+1:7d} | {running_solve_rate:6.1f}% | {running_reward:10.1f} | {agent.epsilon:.3f}")
+        
+        # Evaluate periodically
+        if (episode + 1) % eval_freq == 0:
+            print("\nEvaluating...")
+            original_epsilon = agent.epsilon
+            agent.epsilon = 0.01  # Small epsilon for evaluation
+            
+            # Create separate evaluation environment with test words only
+            eval_env = WordleEnvironment(valid_words=test_words, max_guesses=6)
+            
+            eval_solved = 0
+            eval_total_guesses = 0
+            for eval_episode in range(eval_episodes):
+                eval_word = random.choice(test_words)
+                print(f"\nEvaluation Episode {eval_episode + 1}")
+                print(f"Target word: {eval_word}")
+                
+                feedback_matrix, valid_mask, remaining_guesses = eval_env.reset(eval_word)
+                eval_state = flatten_state(feedback_matrix, valid_mask, remaining_guesses)
+                
+                guesses = []
+                episode_guesses = 0
+                while True:
+                    eval_action = agent.select_action(eval_state, valid_mask)
+                    eval_guess = test_words[eval_action]
+                    episode_guesses += 1
+                    
+                    guesses.append(eval_guess)
+                    print(f"Guess {6-remaining_guesses+1}: {eval_guess}")
+                    print(f"Valid words remaining: {sum(valid_mask)}")
+                    
+                    feedback_matrix, valid_mask, remaining_guesses, reward, done = eval_env.step(eval_guess)
+                    eval_state = flatten_state(feedback_matrix, valid_mask, remaining_guesses)
+                    
+                    if done:
+                        if eval_guess == eval_word:
+                            eval_solved += 1
+                            eval_total_guesses += episode_guesses
+                            print(f"Solved in {episode_guesses} guesses!")
+                        else:
+                            print(f"Failed! Target was {eval_word}. Guesses: {', '.join(guesses)}")
+                        break
+            
+            eval_solve_rate = eval_solved / eval_episodes
+            avg_guesses = eval_total_guesses / eval_solved if eval_solved > 0 else 6.0
+            eval_solve_rates.append(eval_solve_rate)
+            
+            print(f"\nEvaluation Results:")
+            print(f"Solve Rate: {eval_solve_rate*100:.1f}%")
+            print(f"Average Guesses (when solved): {avg_guesses:.2f}")
+            
+            # Save best model
+            if eval_solve_rate > best_solved_rate:
+                best_solved_rate = eval_solve_rate
+                agent.save("dqn_model_best.pth")
+                print(f"New best model saved! Solve rate: {best_solved_rate*100:.1f}%")
+            
+            agent.epsilon = original_epsilon
+    
+    print("\nTraining complete!")
+    print(f"Final solve rate: {(solved_episodes/num_episodes)*100:.1f}%")
+    print(f"Final epsilon: {agent.epsilon:.3f}")
+    print(f"Best evaluation solve rate: {best_solved_rate*100:.1f}%")
+    
+    # Save final model
+    agent.save("dqn_model_final.pth")
+    print("Final model saved to dqn_model_final.pth")
+    
+    return agent, {
+        'episode_rewards': episode_rewards,
+        'episode_lengths': episode_lengths,
+        'running_avg_reward': running_avg_reward,
+        'running_avg_length': running_avg_length,
+        'eval_solve_rates': eval_solve_rates,
+        'best_solved_rate': best_solved_rate
+    }
+
+def load_words(filename):
+    """
+    Load words from a text file, one word per line.
+    
+    Args:
+        filename (str): Path to the word list file
+        
+    Returns:
+        list[str]: List of words from the file
+    """
+    with open(filename, 'r') as f:
+        return [line.strip() for line in f if line.strip()]
+
+if __name__ == "__main__":
+    # Load words
+    train_words = load_words('data/train_words.txt')
+    test_words = load_words('data/test_words.txt')
+    
+    print(f"Loaded {len(train_words)} training words and {len(test_words)} test words")
+    
+    # Train the agent
+    trained_agent, metrics = train(
+        valid_words=train_words,
+        test_words=test_words,
+        num_episodes=1000,
+        hidden_dim=256,
+        learning_rate=1e-4,
+        gamma=0.99,
+        epsilon_start=1.0,
+        epsilon_end=0.01,
+        epsilon_decay=0.995,
+        batch_size=64,
+        target_update_freq=100,
+        eval_freq=200,
+        eval_episodes=50,
+        device="cpu"
+    )
+
+================================================================================
+=== END OF CODEBASE ===

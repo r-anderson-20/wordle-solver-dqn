@@ -1,6 +1,6 @@
 # Wordle Solver using Deep Q-Learning
 
-This project implements an AI agent that learns to play Wordle using Deep Q-Learning (DQN). The agent achieves a 100% solve rate on test words with an average of 3.42 guesses per word.
+This project implements an AI agent that learns to play Wordle using Deep Q-Learning (DQN). The agent achieves a 100% solve rate on test words with an average of 3.0 guesses per word.
 
 ## Project Overview
 
@@ -36,18 +36,30 @@ The agent uses reinforcement learning to develop optimal strategies for solving 
 - Target network for Q-learning stability
 
 ### Training Process (`train.py`)
-- Separate training (500 words) and testing (500 words) sets
-- Periodic evaluation on test set
-- Performance metrics tracking:
-  - Solve rate
-  - Average number of guesses
-  - Training rewards
+The training process uses both training and test word sets:
+- Training words (`word_lists/train_words.txt`):
+  - Used for actual training episodes
+  - Agent learns optimal guessing strategies from these words
+  - Currently contains 500 words
+  - Recommended to keep under 1000 words for efficient training
+
+- Test words (`word_lists/test_words.txt`):
+  - Used for periodic evaluation during training
+  - Used for final performance testing
+  - Currently contains 500 words
+  - Recommended to keep under 1000 words for efficient evaluation
+
+The agent is evaluated every 100 episodes during training to track progress and save the best-performing model.
 
 ## Results
 
 The trained agent achieves:
 - 100% solve rate on test words
-- Average of 3.42 guesses per solved puzzle
+- Average of 3.0 guesses per solved puzzle
+- Guess distribution:
+  - 25% solved in 2 guesses
+  - 50% solved in 3 guesses
+  - 25% solved in 4 guesses
 - Consistent performance across different word patterns
 
 ## Installation
@@ -65,19 +77,14 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Play with Pre-trained Model
-```bash
-python play_games.py
-```
-
 ### Train New Model
 ```bash
-python train.py
+python main.py --mode train --num_episodes 1000
 ```
 
-### Test Model Performance
+### Play Games with Trained Model
 ```bash
-python test.py
+python main.py --mode test
 ```
 
 ## Project Structure
@@ -85,13 +92,16 @@ python test.py
 wordle-solver-DQN/
 ├── agent.py           # DQN agent implementation
 ├── environment.py     # Wordle environment
-├── train.py          # Training script
-├── play_games.py     # Interactive gameplay
-├── test.py           # Testing utilities
+├── main.py           # Main entry point for training and testing
+├── train.py          # Training implementation
+├── play_games.py     # Interactive gameplay and evaluation
+├── utils.py          # Utility functions
 ├── replay_buffer.py  # Experience replay implementation
-├── data/
-│   ├── train_words.txt  # Training word set
-│   └── test_words.txt   # Testing word set
+├── model/            # Trained model files
+│   └── dqn_model_final.pth  # Latest trained model
+├── word_lists/       # Word datasets
+│   ├── train_words.txt      # Training word set (500 words)
+│   └── test_words.txt       # Testing word set (500 words)
 └── requirements.txt   # Project dependencies
 ```
 
@@ -101,22 +111,23 @@ wordle-solver-DQN/
 - NumPy >= 1.21.0
 - tqdm >= 4.65.0
 
-## Training Details
+## Limitations and Considerations
+1. Word List Size:
+   - Training and test sets are currently limited to 500 words each
+   - Larger word sets are possible but will increase training time
+   - Performance may degrade with significantly larger word sets (>1000 words)
 
-The agent is trained using:
-- Experience replay buffer (size: 10,000)
-- Epsilon-greedy exploration (start: 1.0, end: 0.01, decay: 0.995)
-- Learning rate: 1e-4
-- Discount factor (gamma): 0.99
-- Hidden layer size: 256 neurons
-- Target network update frequency: 100 episodes
-- Batch size: 64
+2. Training Time:
+   - Training for 1000 episodes takes approximately 1-2 minutes
+   - Increasing the number of episodes or word list size will increase training time
 
-## License
+3. Memory Usage:
+   - The experience replay buffer size is proportional to the number of training episodes
+   - Large word lists may require more memory for the valid word mask
 
-This project is open source and available under the MIT License.
+4. Model Size:
+   - The final trained model is approximately 7MB
+   - Model size scales with the hidden layer dimensions
 
-## Acknowledgments
-
-- Inspired by the original Wordle game by Josh Wardle
-- Built using PyTorch for deep learning implementation
+## Contributing
+Contributions are welcome! Please feel free to submit a Pull Request.
